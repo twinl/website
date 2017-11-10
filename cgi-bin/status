@@ -1,0 +1,430 @@
+#!/usr/bin/perl -w
+# status: show job status of hadoop cluster
+# usage: status (via cgi)
+# 20121219 erikt(at)xs4all.nl
+
+# set errorlog file
+BEGIN { open(STDERR, ">>/home/cloud/etc/errorlog"); }
+
+use strict;
+# use encoding 'utf8';
+use CGI;
+use CGI qw(:standard);
+use File::Basename;
+use CGI::Cookie;
+use Env;
+
+# environment variables
+$ENV{"CLIENT_DIR"} = "/home/cloud/software/hathi-client";
+$ENV{"KRB5_CONF"} = $ENV{"CLIENT_DIR"}."/conf/krb5.conf";
+$ENV{"KRB5_CONFIG"} = $ENV{"CLIENT_DIR"}."/conf/krb5.conf";
+$ENV{"HADOOP_HOME"} = $ENV{"CLIENT_DIR"}."/hadoop";
+$ENV{"HADOOP_CONF"} = $ENV{"HADOOP_HOME"}."/etc/hadoop";
+$ENV{"HADOOP_CONF_DIR"} = $ENV{"HADOOP_CONF"};
+$ENV{"HADOOP_CMD"} = $ENV{"HADOOP_HOME"}."/bin/hadoop";
+$ENV{"HADOOP_CLASSPATH"} = $ENV{"CLIENT_DIR"}."/conf/tez:";
+$ENV{"HADOOP_STREAMING"} = $ENV{"HADOOP_HOME"}."/share/hadoop/tools/lib/hadoop-streaming-*jar";
+$ENV{"JAVA_HOME"} = "/usr/lib/jvm/java-1.7.0-openjdk-1.7.0.55.x86_64/";
+
+my $MAPRED = $ENV{"HADOOP_HOME"}."/bin/mapred";
+my $MAXLOAD = 10;
+
+my $MAXHISTORY = 5000; # maximum number of lines to read from logfile
+
+# get parameters (rather than CGI->Vars: problem with utf)
+# from: http://www.mediacollege.com/internet/perl/query-string.html
+my %params = ();
+my $line = defined $ENV{"QUERY_STRING"} ? $ENV{"QUERY_STRING"} : "";
+while (<STDIN>) {
+   my $nextLine = $_;
+   if ($nextLine ne "" and $line ne "") { $line = $line . "&" . $nextLine; }
+   else { $line .= $nextLine; }
+}
+if (length($line) > 0){
+   my $buffer = $line;
+   my @pairs = split(/&/, $buffer);
+   foreach my $pair (@pairs){
+      my ($name, $value) = split(/=/, $pair);
+      if (defined $value) { $params{$name} = $value; }
+      else { $params{$name} = ""; }
+   }
+}
+
+# read message of the day
+my $motdFile = "/home/cloud/MOTD";
+my $motd = "";
+if (open(INFILE,$motdFile)) {
+   while (<INFILE>) {
+      my $line = $_;
+      $motd .= $line;
+   }
+   close(INFILE);
+}
+
+# create heading for CGI output
+my $q = CGI->new;
+#$q->charset('UTF-8');
+%params = $q->Vars;
+my $MAXPROCESSES = 20;
+my $nbrOfProcesses = 0;
+if (open(INFILE,"/bin/ps -ef|grep java|wc -l|")) {
+   $nbrOfProcesses = <INFILE>;
+   chomp($nbrOfProcesses);
+   $nbrOfProcesses =~ s/\s//g;
+}
+my $load = &getLoad();
+if (0+$load >= $MAXLOAD and $nbrOfProcesses > $MAXPROCESSES) {
+   print $q->header(-charset=>'utf-8');
+   print "de server is overbelast\n";
+   exit(0);
+}
+
+my $basename = fileparse($0);
+my $command = "/cgi-bin/$basename";
+my $url = "$command";
+my $searchUrl = $url;
+$searchUrl =~ s/-status$//;
+my $logDir = "/home/cloud/etc";
+my $baseDir = "/home/cloud/etc";
+my $cookieDir = "$baseDir/cookies";
+my $logFile = "$baseDir/logfile";
+
+# check cookie
+my $mainUser = "guest";
+my $mainHost = "";
+my %cookies = CGI::Cookie->fetch;
+my $myCookie = "";
+if (defined $cookies{"cookie"} and defined $cookies{"cookie"}->value) {
+   my $inFile = $cookies{"cookie"}->value;
+   $myCookie = cookie(-name => "cookie",
+                      -value => $inFile);
+                      #-expires => "+60m");
+   if (open(INFILE,"$cookieDir/$inFile")) {
+      my $line = <INFILE>;
+      close(INFILE);
+      chomp($line);
+      ($mainUser,$mainHost) = split(/\s+/,$line);
+      # host should match with login host
+      if ($mainHost ne $ENV{"REMOTE_ADDR"}) { $mainUser = "guest"; } 
+   }
+} 
+
+if (not defined $myCookie or $myCookie eq "") { print $q->header(-charset=>'utf-8'); }
+else { print $q->header(-charset=>'utf-8', -cookie=>$myCookie); }
+
+# read logfile
+my %log = ();
+if (open(INFILE,"/usr/bin/tail -$MAXHISTORY $logDir/logfile |")) {
+   while (<INFILE>) {
+      my $line = $_;
+      chomp($line);
+      my @fields = split(/\s+/,$line);
+      shift(@fields);shift(@fields);shift(@fields);
+      if (not defined $fields[0] or $fields[0] ne "hadoop") { next; }
+      shift(@fields);
+      my $session = shift(@fields);
+      my $time = shift(@fields);
+      my $user = shift(@fields);
+      my $task = shift(@fields);
+      my $date = shift(@fields);
+      my $search = join(" ",@fields);
+      my ($jobId) = &readSessionFile($session);
+      if (defined $jobId) { $log{$jobId} = "$session\t$user\t$task($search)\t$date"; }
+   }
+   close(INFILE);
+}
+
+my $search = "";
+my $searchForUrl = "";
+my $date = "";
+my $mainSession = "";
+my $params = "";
+if (defined $params{"SEARCH"} and defined $params{"DATE"}) {
+   $search = $params{"SEARCH"};
+   $searchForUrl = $search;
+   $searchForUrl =~ s/\+/%2B/g;
+   $searchForUrl =~ s/#/%23/g;
+   $date = $params{"DATE"};
+   $date =~ tr/'//d;
+   if ($search ne "" and $date ne "") { $params = "?SEARCH=$searchForUrl&DATE=$date"; }
+   $mainSession = $params{"SESSION"};
+   if ($mainSession ne "" and $params ne "") { $params .= "&SESSION=$mainSession"; }
+   if ($mainSession ne "" and -f "/tmp/done.$mainSession") { $url = "$searchUrl"; }
+}
+
+# read hadoop job status
+print <<THEEND;
+<html>
+<head>
+<title>SURFsara Hadoop Cluster Status</title>
+<meta http-equiv="refresh" content="10;url='$url$params'">
+</head>
+<body>
+<small><font color="red">$motd</font></small>
+<small>Probeer ook eens de <a href="https://twinl.surfsara.nl">nieuwe snelle versie van twiqs.nl</a>. <a href="http://ifarm.nl/erikt/twinl/2016/07/11/new-and-faster-version-of-twiqs-nl/">Feedback</a> is van harte welkom!</small>
+THEEND
+
+if ($search ne "" and $date ne "") {
+   $search =~ s/\%2[Bb]/+/g;
+   print <<THEEND;
+<p>
+Bezig met zoeken naar "$search" in $date, even geduld... (<a target="_parent" href="$searchUrl">home</a>)
+THEEND
+}
+
+print <<THEEND;
+<h2>SURFsara Hadoop Cluster Status</h2>
+<p>
+<table cellpadding="5" cellspacing="0" border="1">
+<tr><th> Start Time <th> Map Task <th> Reduce Task <th> User Name <th> User Task <th> Time Frame <th> &nbsp;
+THEEND
+if (open(INFILE,"/home/cloud/etc/status.txt")) {
+   my %users = ();
+   my %twiqsUsers = ();
+   my $nbrOfUsers = 0;
+   my $nbrOfTwiqsUsers = 0;
+   while (<INFILE>) {
+      my $line = $_;
+      chomp($line);
+      if ($line =~/^ *job_/) {
+        #my ($jobId,$status,$startTime,$user,$priority,$info) = split(/\t/,$line);
+         my ($jobId,$status,$startTime,$user,$queue,$priority,$info) = split(/\t/,$line);
+         $jobId =~ s/^\s*//;
+         $startTime =~ s/...$//;
+         my ($s,$m,$h,$d,$b,$y) = localtime($startTime);
+         if ($s < 10) { $s = "0$s"; }
+         if ($m < 10) { $m = "0$m"; }
+         if ($h < 10) { $h = "0$h"; }
+         if ($d < 10) { $d = "0$d"; }
+         $b++;
+         if ($b < 10) { $b = "0$b"; }
+         $y += 1900;
+         $user =~ s/^\s*//;
+         if ($user ne "eriktks") { 
+            if (defined $users{$user}) { $user = $users{$user}; }
+            else {
+               $nbrOfUsers++;
+               $users{$user} = "hadoop-user-$nbrOfUsers";
+               $user = $users{$user};
+            }
+         }
+         my @fields = split(/\s+/,$info);
+         my ($mNodes,$rNodes) = (0,0);
+         if (defined $fields[5] and defined $fields[17]) {
+            ($mNodes,$rNodes) = ($fields[5],$fields[17]);
+         } 
+         my $logInfo = "";
+         my $shortTime = $startTime;
+         $shortTime =~ s/(.*)...$/$1/;
+         my $killImage = "&nbsp;&nbsp;&nbsp;";
+         if ($user =~ /^hadoop-user/) {
+            my $mPlural = ($mNodes != 1) ? "s" : "";
+            my $rPlural = ($rNodes != 1) ? "s" : "";
+            printf "<tr><td> <font title=\"$jobId\">$d/$b/$y $h:$m:$s</font> <td> &nbsp; <td> &nbsp; <td> $user <td> &nbsp; <td> &nbsp; <td> $killImage  \n",$mNodes,$rNodes;
+         } else {
+            my $mDone = 0;
+            my $rDone = 0;
+            my $user = "twiqs-system";
+            my $task = "&nbsp;";
+            my $date = "&nbsp;";
+            my $session = "";
+            my $mPlural = ($mNodes != 1) ? "s" : "";
+            my $rPlural = ($rNodes != 1) ? "s" : "";
+            if (defined $log{$jobId}) {
+               ($session,$user,$task,$date) = split(/\t+/,$log{$jobId}); 
+               ($_,$mDone,$rDone) = &readSessionFile($session);
+               my $color = "";
+               if ($session eq $mainSession) { $color = " style=\"background-color:pink;\""; }
+               elsif (($mainUser ne $user or $mainUser eq "guest") and $mainUser ne "erikt") {
+                  $task = $date = "***";
+                  if (defined $twiqsUsers{$user}) { $user = $twiqsUsers{$user}; }
+                  else {
+                     $nbrOfTwiqsUsers++;
+                     $twiqsUsers{$user} = "twiqs-user-$nbrOfTwiqsUsers";
+                     $user = $twiqsUsers{$user};
+                  }
+               }
+               my $longDate = $date;
+               if ($date =~ /^(\d\d\d\d\d\d\d\d\d\d)-(\d\d\d\d\d\d\d\d\d\d)$/) {
+                  my ($d1,$d2) = ($1,$2);
+                  if ($d1 eq $d2) { $date = $d1; }
+                  else {
+                     my ($y1,$m1,$d1,$h1,$y2,$m2,$d2,$h2) = &splitDate($date);
+                     if ($y1 eq $y2 and $m1 eq $m2 and $d1 eq $d2 and $h1 eq "00" and $h2 eq "23") { $date = "$y1$m1$d1"; }
+                     elsif ($y1 eq $y2 and $m1 eq $m2 and $d1 eq "01" and $d2 == &maxDays($y2,$m2) and $h1 eq "00" and $h2 eq "23") { $date = "$y1$m1"; }
+                     elsif ($y1 eq $y2 and $m1 eq "01" and $m2 eq "12" and $d1 eq "01" and $d2 eq "31" and $h1 eq "00" and $h2 eq "23") { $date = "$y1"; }
+                     else {
+                        my $date1 = "$y1$m1$d1$h1";
+                        my $date2 = "$y2$m2$d2$h2";
+                        if ($h1 eq "00" and $d1 eq "01" and $m1 eq "01") { $date1 = "$y1" }
+                        elsif ($h1 eq "00" and $d1 eq "01") { $date1 = "$y1$m1" }
+                        elsif ($h1 eq "00") { $date1 = "$y1$m1$d1" }
+                        if ($h2 eq "23" and $d2 eq "31" and $m2 eq "12") { $date2 = "$y2" }
+                        elsif ($h2 eq "23" and $d2 == &maxDays($y2,$m2)) { $date2 = "$y2$m2" }
+                        elsif ($h2 eq "23") { $date2 = "$y2$m2$d2" }
+                        $date = "$date1-$date2";
+                     }
+                  }
+               }
+               if (defined $params{"KILL"} and $params{"KILL"} eq $jobId and ($mainUser eq "erikt" or ($mainUser eq $user and $mainUser ne "guest"))) {
+                  system($MAPRED." job -kill $jobId >/dev/null");
+                  system($ENV{"HADOOP_CMD"}." fs -rmr cache/$longDate/Search/$search >/dev/null");
+                  &log("user $user killed job $jobId: cache/$date/Search/$search");
+               } else {
+                  if ($mainUser eq "erikt" or ($mainUser eq $user and $mainUser ne "guest")) {
+                     if (not defined $params or $params eq "") {
+                        $killImage = "<a href=\"$url?KILL=$jobId\" title=\"stop\"><img src=\"/images/Ol_icon_red_example.png\" width=\"10\" height=\"10\" alt=\"\" border=\"0\"></a>";
+                     } else {
+                        $killImage = "<a href=\"$url$params&KILL=$jobId\" title=\"stop\"><img src=\"/images/Ol_icon_red_example.png\" width=\"10\" height=\"10\" alt=\"\" border=\"0\"></a>";
+                     }
+                  }
+                  print <<THEEND
+<tr$color><td> <font title="$jobId">$d/$b/$y $h:$m:$s</a> <td> ${mDone}% done <td> ${rDone}% done <td> $user <td> $task <td> $date <td> $killImage
+THEEND
+               }
+            } else {
+               printf "<tr><td> <font title=\"$jobId\">$d/$b/$y $h:$m:$s</font> <td> &nbsp; <td> &nbsp; <td> %s <td> %s <td> %s <td> %s\n",
+                  $user,$task,$date,$killImage;
+            }
+         }
+      }
+   }
+   close(INFILE);
+}
+my $prettyDate = &prettyDate();
+my $load = &getLoad();
+if ($load >= 10) { $load = "<font color=\"red\">$load</font>"; }
+$load = "Web server load: $load\n";
+my $hadoopFileCount = &getHadoopFileCount();
+if ($hadoopFileCount >= 900000) { $hadoopFileCount = "<font color=\"red\">$hadoopFileCount</font>"; }
+$hadoopFileCount = "<br>Number of Hadoop files used: $hadoopFileCount\n";
+if ($mainUser ne "erikt") { $hadoopFileCount = ""; }
+print <<THEEND;
+</table>
+<p>
+$load$hadoopFileCount<hr>
+<address>
+Generated at: $prettyDate.
+erikt(at)xs4all.nl
+(<a href="$searchUrl">home</a>)
+</address>
+</body>
+</html>
+THEEND
+
+exit(0);
+
+sub readSessionFile() {
+   my $session = shift(@_);
+   if (open(SESSIONFILE,"/tmp/$session.err")) {
+      my $jobId = "";
+      my $mDone = 0;
+      my $rDone = 0;
+      while (<SESSIONFILE>) {
+         my $line = $_;
+         chomp($line);
+         if ($line =~ /Running job: (\S+)/) { $jobId = $1; }
+         if ($line =~ /map\s*(\d+)%\s*reduce\s*(\d+)%/) { $mDone = $1; $rDone = $2; }
+      }
+      close(SESSIONFILE);
+      return($jobId,$mDone,$rDone);
+   } else { return(); }
+}
+
+sub prettyDate() {
+   my ($second,$minute,$hour,$day,$month,$year,$weekday) = localtime(time);
+   $year += 1900;
+   if ($hour !~ /../) { $hour = "0$hour"; }
+   if ($minute !~ /../) { $minute = "0$minute"; }
+   if ($second !~ /../) { $second = "0$second"; }
+   my @months = qw(January February March April May June July August September October November December);
+   return("$day $months[$month] $year $hour:$minute:$second");
+}
+
+sub fixUTF() {
+   my $line = shift(@_);
+
+   $line =~ s/\%c3\%aa/ê/gi; # incomplete list!
+   $line =~ s/\%c3\%a0/à/gi;
+   $line =~ s/\%c3\%a1/á/gi;
+   $line =~ s/\%c3\%a6/æ/gi;
+   $line =~ s/\%c3\%a7/ç/gi;
+   $line =~ s/\%c3\%b6/ö/gi;
+   $line =~ s/\%c3\%ab/ë/gi;
+   $line =~ s/\%c3\%a8/è/gi;
+   $line =~ s/\%c3\%a9/é/gi;
+   $line =~ s/%([a-fA-F0-9][a-fA-F0-9])/pack("C", hex($1))/eg;
+   return($line);
+}
+
+sub splitDate() {
+   my ($date) = @_;
+   my @d = split(//,$date);
+   my $year1 = defined $d[3] ? $d[0].$d[1].$d[2].$d[3] : "";
+   if ($year1 !~ /^\d{4}$/) { $year1 = ""; }
+   my $month1 = defined $d[5] ? $d[4].$d[5] : "";
+   if ($month1 !~ /^\d\d$/) { $month1 = ""; }
+   my $day1 = defined $d[7] ? $d[6].$d[7] : "";
+   if ($day1 !~ /^\d\d$/) { $day1 = ""; }
+   my $hour1 = defined $d[9] ? $d[8].$d[9] : "";
+   if ($hour1 !~ /^\d\d$/) { $hour1 = ""; }
+   my $year2 = defined $d[14] ? $d[11].$d[12].$d[13].$d[14] : "";
+   if ($year2 !~ /^\d{4}$/) { $year2 = ""; }
+   my $month2 = defined $d[16] ? $d[15].$d[16] : "";
+   if ($month2 !~ /^\d\d$/) { $month2 = ""; }
+   my $day2 = defined $d[18] ? $d[17].$d[18] : "";
+   if ($day2 !~ /^\d\d$/) { $day2 = ""; }
+   my $hour2 = defined $d[20] ? $d[19].$d[20] : "";
+   if ($hour2 !~ /^\d\d$/) { $hour2 = ""; }
+   return($year1,$month1,$day1,$hour1,$year2,$month2,$day2,$hour2);
+}
+
+sub maxDays() {
+   my ($year,$month) = @_;
+
+   if (not defined $year or not defined $month or $year eq "" or $month eq "") { return(""); }
+   if ($month == 4 or $month == 6 or $month == 9 or $month == 11) { return(30); }
+   elsif ($month == 2) {
+      if ($year % 4 != 0 or ($year % 100 == 0 and $year % 400 != 0)) { return(28); }
+      else { return(29); }
+   } else { return(31); }
+}
+
+sub log() {
+   my @fields = @_;
+   my $client = $ENV{"REMOTE_ADDR"};
+   my ($second,$minute,$hour,$day,$month,$year) = localtime(time);
+   $year += 1900;
+   $month++;
+   if ($month !~ /../) { $month = "0$month"; }
+   if ($day !~ /../) { $day = "0$day"; }
+   if ($hour !~ /../) { $hour = "0$hour"; }
+   if ($minute !~ /../) { $minute = "0$minute"; }
+   if ($second !~ /../) { $second = "0$second"; }
+   my $today = "$year-$month-$day $hour:$minute:$second";
+   if (open(LOGFILE,">>$logFile")) {
+      print LOGFILE "$today $client @fields\n";
+      close(LOGFILE);
+   }
+}
+
+sub getLoad() {
+   my $load = 0;
+   if (open(INFILE,"w|rev|cut -d' ' -f3|rev|head -1|tr -d ,|")) {
+      $load = <INFILE>;
+      chomp($load);
+      close(INFILE);
+   }
+   return($load);
+}
+
+sub getHadoopFileCount() {
+   my $count = 0;
+   if (open(INFILE,"/home/cloud/etc/hadoopfiles.txt")) {
+      $count = <INFILE>;
+      chomp($count);
+      close(INFILE);
+   }
+   return($count);
+}
+

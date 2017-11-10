@@ -1,0 +1,3788 @@
+#!/usr/bin/perl -w
+# search: search for word in Twitter data and generate frequency information
+# usage: search (via cgi)
+# 20120925 erikt(at)xs4all.nl
+###############################################################################
+# Copyright 2012-2014 Erik Tjong Kim Sang / Netherlands eScience Center
+#
+# Licensed under the Apache License, Version 2.0 (the "License");
+# you may not use this file except in compliance with the License.
+# You may obtain a copy of the License at
+#
+#     http://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing, software
+# distributed under the License is distributed on an "AS IS" BASIS,
+# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+# See the License for the specific language governing permissions and
+# limitations under the License.
+###############################################################################
+
+# set errorlog file
+BEGIN { open(STDERR, ">>/home/cloud/etc/errorlog"); }
+
+# use encoding 'utf8';
+use CGI;
+use CGI qw(:standard);
+use CGI::Cookie;
+#use lib '/home/cloud/software/JSON-2.53/lib'; # for JSON libraries
+use lib '/home/cloud/perl5/lib/perl5'; # for JSON libraries
+use JSON;
+use File::Basename;
+use Encode;
+use Env;
+
+# assure utf8 formatted output
+# binmode STDIN, ":encoding(UTF-8)";
+# binmode STDOUT, ":encoding(UTF-8)";
+$motdFile = "/home/cloud/MOTD";
+$motd = "";
+if (open(INFILE,$motdFile)) {
+   while (<INFILE>) {
+      $line = $_;
+      $motd .= $line;
+   }
+   close(INFILE);
+}
+# $motd = "<small><font color=\"red\">Woensdag 27 februari 17:00: vanwege een storing op het Hadoopcluster kunnen op dit moment geen nieuwe zoekopdrachten worden uitgevoerd.</font></small>";
+# $motd = "<small><font color=\"red\">Het Hadoopcluster is op dinsdag 5 februari 2013 in onderhoud. De zoekfunctie zal daarom regelmatig haperen</font></small>";
+# $website = "http://twiqs-nl.twinl-esc.cloudlet.sara.nl"; # or: twiqs-nl.twinl-esc.cloudlet.sara.nl
+$basename = fileparse($0);
+$command = "/cgi-bin/$basename";
+$command =~ s/-logout$//;
+$url = "$command";
+$statusUrl = "${url}-status";
+$baseDir = "/home/cloud/etc";
+$userDir = "$baseDir/users";
+$cookieDir = "$baseDir/cookies";
+$logFile = "$baseDir/logfile";
+$errFile = "$baseDir/errorlog";
+$passwdFile = "$baseDir/passwd";
+@months = qw(januari februari maart april mei juni juli augustus september oktober november december);
+$sleep = 60;
+
+# environment variables
+$ENV{"CLIENT_DIR"} = "/home/cloud/software/hathi-client";
+$ENV{"KRB5_CONF"} = $ENV{"CLIENT_DIR"}."/conf/krb5.conf";
+$ENV{"KRB5_CONFIG"} = $ENV{"CLIENT_DIR"}."/conf/krb5.conf";
+$ENV{"HADOOP_HOME"} = $ENV{"CLIENT_DIR"}."/hadoop";
+$ENV{"HADOOP_CONF"} = $ENV{"HADOOP_HOME"}."/etc/hadoop";
+$ENV{"HADOOP_CONF_DIR"} = $ENV{"HADOOP_CONF"};
+$ENV{"HADOOP_CMD"} = $ENV{"HADOOP_HOME"}."/bin/hadoop";
+$ENV{"HADOOP_CLASSPATH"} = $ENV{"CLIENT_DIR"}."/conf/tez:";
+$ENV{"HADOOP_STREAMING"} = $ENV{"HADOOP_HOME"}."/share/hadoop/tools/lib/hadoop-streaming-*.jar";
+$ENV{"JAVA_HOME"} = "/usr/lib/jvm/java-1.7.0-openjdk-1.7.0.55.x86_64/";
+
+$ENV{"PATH"} = $ENV{"HADOOP_HOME"}."/bin:/bin:/usr/bin:/home/cloud/bin:";
+
+%stopWords = qw(de 1 het 1 een 1 van 1 met 1 in 1 dat 1 als 1 wel 1 geen 1 ze 1 ook 1 uit 1 vanwege 1 vele 1 zich 1 er 1 op 1 nu 1 zullen 1 en 1 gaat 1 bij 1 die 1 dus 1 naar 1 is 1 zijn 1 http 1 t 1 co 1 dan 1 dit 1 voor 1 al 1 bijna 1 toe 1 tot 1 lt 1 heb 1 hebt 1 je 1 na 1 om 1 wat 1 door 1 heeft 1 over 1 rt 1 maar 1 was 1 zit 1 te 1 ver 1 daar 1 gaan 1 wie 1 kunnen 1 alle 1 eens 1 haalt 1 keer 1 kijk 1 moeten 1 toch 1 u 1 via 1 mocht 1 mogen 1 jullie 1 zeker 1 nog 1 zou 1 heel 1 noemt 1 neemt 1 vaak 1 hij 1 zij 1 wij 1 blijft 1 hebben 1 hun 1 staan 1 staat 1 tegen 1 bent 1 achter 1 nl 1 ik 1 jij 1 jou 1 me 1 mijn 1 mij 1 we 1 zo 1 aan 1 wordt 1 aan 1 hou 1 houden 1 houdt 1 hield 1 hielden 1 retweet 1 wilt 1 vindt 1 weet 1 vind 1 deze 1 of 1 the 1 to 1 amp 1);
+$menuBackground = "#759090";
+$menuHover = "#557070";
+$cloudForeground = $menuHover;
+@colorsGps = qw(red green blue);
+@colorsTown = qw(orange yellow purple);
+$everything = "echtalles";
+$MAIL= "erikt(at)xs4all.nl";
+$MAXLOAD = 10;
+$MESSAGE = "";
+
+# get parameters (rather than CGI->Vars: problem with utf)
+# from: http://www.mediacollege.com/internet/perl/query-string.html
+# my %params = ();
+# my $line = defined $ENV{"QUERY_STRING"} ? $ENV{"QUERY_STRING"} : "";
+# while (<STDIN>) { 
+#    $nextLine = $_;
+#    if ($nextLine ne "" and $line ne "") { $line = $line . "&" . $nextLine; }
+#    else { $line .= $nextLine; }
+# }
+# if (length($line) > 0){
+#    $buffer = $line;
+#    @pairs = split(/&/, $buffer);
+#    foreach $pair (@pairs){
+#       ($name, $value) = split(/=/, $pair);
+#       if (defined $value) { $params{$name} = $value; }
+#       else { $params{$name} = ""; }
+#    }
+# }
+
+# cgi parameters
+$q = CGI->new;
+# $q->charset('UTF-8');
+%params = $q->Vars;
+
+$MAXPROCESSES = 20;
+$nbrOfProcesses = 0;
+if (open(INFILE,"/bin/ps -ef|grep java|wc -l|")) {
+   $nbrOfProcesses = <INFILE>;
+   chomp($nbrOfProcesses);
+   $nbrOfProcesses =~ s/\s//g;
+}
+my $load = &getLoad();
+if (0+$load >= $MAXLOAD and $nbrOfProcesses > $MAXPROCESSES) {
+   print $q->header(-charset=>'utf-8');
+   print "de server is overbelast\n";
+   exit(0);
+}
+# $blocked{"192.87"} = 1;   # for 192.87.139.139 (test)
+$blocked{"195.169.33"} = 1; # for 195.169.33.7 20130402
+$blocked{"83.161.198"} = 1; # for 83.161.198.91 20130524
+$blocked{"145.100.6"} = 1;  # for 145.100.6.115 20130524
+#$blocked{"131.174.30"} = 1;  # for 131.174.30.5 20140818
+$domain = $ENV{"REMOTE_ADDR"};
+$domain =~ s/\.\d+$//;
+if (defined $blocked{$domain} or $nbrOfProcesses > $MAXPROCESSES) {
+   print $q->header(-charset=>'utf-8'); # for debugging
+   if ($nbrOfProcesses > $MAXPROCESSES) {
+      print "Er draaien op dit moment te veel Javaprocessen op twiqs.nl: $nbrOfProcesses\n";
+   }
+   exit(0);
+}
+
+# process search parameter
+$search = "";
+if (defined $params{"SEARCH"} and $params{"SEARCH"} =~ /^.{1,128}$/) { 
+   $search = $params{"SEARCH"}; 
+   # cleanup query
+#  $search =~ tr/a-zA-Z0-9,. _@-//cd;
+#  $search =~ tr/+/ /;
+   $search =~ s/^\s+//;
+   $search =~ s/\s+$//;
+   $search =~ s/\s+/ /g;
+   $search = lc($search);
+   $search =~ s/^twiqs-/twinl-/;
+
+#  $search = &fixUTF($search);
+#  $search =~ s/\#//; # 20131122
+   if ($search =~ /,/) {
+      # sort multiple search terms, remove redundant spaces
+      my @search = split(/\s*,\s*/,$search);
+      for (my $i=0;$i<=$#search;$i++) { 
+         $search[$i] =~ s/^\s+//;
+         $search[$i] =~ s/\s+$//;
+      }
+      @search = sort(@search);
+      $search = join(",",@search);
+   }
+}
+
+# process session parameter
+if (defined $params{"SESSION"} and $params{"SESSION"} =~ /^.{1,64}$/) {
+   $session = $params{"SESSION"};
+   # cleanup query
+   $session =~ tr/a-zA-Z0-9.-//cd;
+}
+# determine current date
+($_,$_,$_,$thisDay,$thisMonth,$thisYear) = localtime(time);
+$thisYear += 1900;
+$thisMonth++; if ($thisMonth !~ /../) { $thisMonth = "0$thisMonth"; }
+if ($thisDay !~ /../) { $thisDay = "0$thisDay"; }
+$today = "$thisYear$thisMonth$thisDay";
+$year1 = $month1 = $day1 = $hour1 = "";
+if (defined $params{"YEAR1"}) { $year1 = $params{"YEAR1"}; }
+if (defined $params{"MONTH1"}) { $month1 = $params{"MONTH1"}; }
+if (defined $params{"DAY1"}) { $day1 = $params{"DAY1"}; }
+if (defined $params{"HOUR1"}) { $hour1 = $params{"HOUR1"}; }
+$year2 = $month2 = $day2 = $hour2 = "";
+if (defined $params{"YEAR2"}) { $year2 = $params{"YEAR2"}; }
+if (defined $params{"MONTH2"}) { $month2 = $params{"MONTH2"}; }
+if (defined $params{"DAY2"}) { $day2 = $params{"DAY2"}; }
+if (defined $params{"HOUR2"}) { $hour2 = $params{"HOUR2"}; }
+($date1,$date2) = &processDates($year1,$month1,$day1,$hour1,$year2,$month2,$day2,$hour2);
+$date = "$date1-$date2";
+if (defined $params{"DATE"} and $params{"DATE"} =~ /^\d{10}-\d{10}$/) { 
+   $date = $params{"DATE"};
+   ($year1,$month1,$day1,$hour1,$year2,$month2,$day2,$hour2) = &splitDate($date);
+   $date1 = $year1.$month1.$day1.$hour1;
+   $date2 = $year2.$month2.$day2.$hour2;
+}
+# only allow one hour searches for everything (echtalles)
+if (defined $search and $search eq $everything and ($date2 ne $date1 and 
+    ($date1 ne "2012120400" or $date2 ne "2012120423") and
+    ($date1 ne "2013022500" or $date2 ne "2013022523") and
+    ($date1 ne "2013022600" or $date2 ne "2013022623") and
+    ($date1 ne "2013022700" or $date2 ne "2013022723") and
+    ($date1 ne "2013022800" or $date2 ne "2013022823") and
+    ($date1 ne "2013030100" or $date2 ne "2013030123") and
+    ($date1 ne "2013030200" or $date2 ne "2013030223") and
+    ($date1 ne "2013030300" or $date2 ne "2013030323")
+   )) {
+   $date2 = $date1;
+   $date = "$date1-$date1";
+   $year2 = $year1;
+   $month2 = $month1;
+   $day2 = $day1;
+   $hour2 = $hour1;
+}
+
+$selectedMinute = "00";
+if (defined $params{"SELECTEDMINUTE"}) { $selectedMinute = $params{"SELECTEDMINUTE"}; }
+$selectedHour = "00";
+if (defined $params{"SELECTEDHOUR"}) { $selectedHour = $params{"SELECTEDHOUR"}; }
+$selectedDay = "01";
+if (defined $params{"SELECTEDDAY"}) { $selectedDay = $params{"SELECTEDDAY"}; }
+$download = 0;
+if (defined $params{"DOWNLOAD"}) { $download = 1; }
+$sentimentOverview = 0;
+if (exists $params{"SENTIMENTOVERVIEW"}) { $sentimentOverview = 1; }
+$SMOOTH = -1;
+if (exists $params{"SMOOTH"}) { $SMOOTH = $params{"SMOOTH"}; }
+$HEATMAPMAX = -1;
+if (exists $params{"HEATMAPMAX"}) { $HEATMAPMAX = $params{"HEATMAPMAX"}; }
+
+$showGraph = 1;
+$showMap = 0;
+$showHeatMap = 0;
+$showTweets = 0;
+$showOriginals = 0;
+$showMetadata = 0;
+$showCloud = 0;
+$showExperts = 0;
+$showCoverage = 0;
+$reset = 0;
+if (defined $params{"SHOWMAP"}) {
+   $showGraph = 0;
+   $showMap = 1;
+} elsif (defined $params{"SHOWHEATMAP"}) {
+   $showGraph = 0;
+   # heatmap code does not work for Microsoft Internet Explorer
+   if (defined $ENV{"HTTP_USER_AGENT"} and $ENV{"HTTP_USER_AGENT"} =~ /MSIE/) { $showMap = 1 }
+   else { $showHeatMap = 1; }
+} elsif (defined $params{"SHOWMETADATA"}) {
+   $showGraph = 0;
+   $showMetadata = 1;
+} elsif (defined $params{"SHOWTWEETS"}) {
+   $showGraph = 0;
+   $showTweets = 1;
+} elsif (defined $params{"SHOWORIGINALS"}) {
+   $showGraph = 0;
+   $showOriginals = 1;
+} elsif (defined $params{"RESET"}) {
+   $showGraph = 0;
+   $reset = 1;
+} elsif (defined $params{"SHOWCLOUD"}) {
+   $showGraph = 0;
+   $showCloud = 1;
+} elsif (defined $params{"SHOWHASH"}) {
+   $showGraph = 0;
+   $showHash = 1;
+} elsif (defined $params{"SHOWDESC"}) {
+   $showGraph = 0;
+   $showDesc = 1;
+} elsif (defined $params{"SHOWUSERS"}) {
+   $showGraph = 0;
+   $showExperts = 1;
+} elsif (defined $params{"SHOWCOVERAGE"}) {
+   $showGraph = 0;
+   $showCoverage = 1;
+}
+$cache = "/var/www/cache";
+$cloudFile = "cloud.$date.$search.txt";
+$cloudAllFile = "cloud.$date.$search.all.txt";
+$expertsFile = "experts.$date.$search.txt";
+$expertsAllFile = "experts.$date.$search.all.txt";
+$hashFile = "hash.$date.$search.txt";
+$dataFile = "data.$date.$search.txt";
+$geoFile = "geo.$date.$search.txt";
+$imgFile = "plot.$date.$search.svg";
+$imgCoverage = "plot.coverage.$date.svg";
+$totalCoverage = "total.coverage.$date.txt";
+$mapFile = "map.$date.$search.txt";
+$mapFile =~ s/#/%23/g;
+
+# check cookie
+$user = "guest";
+$host = "";
+$userLevel = "";
+%cookies = CGI::Cookie->fetch;
+$myCookie = "";
+if (defined $cookies{"cookie"} and defined $cookies{"cookie"}->value) {
+   $inFile = $cookies{"cookie"}->value;
+   $myCookie = cookie(-name => "cookie",
+                      -value => $inFile);
+                      #-expires => "+60m");
+   if (open(INFILE,"$cookieDir/$inFile")) {
+      $line = <INFILE>;
+      close(INFILE);
+      chomp($line);
+      ($user,$host) = split(/\s+/,$line);
+      # host should match with login host
+      if ($host ne $ENV{"REMOTE_ADDR"}) { 
+         $basename .= "-logout";
+         &logLine("invalid login",$host,$ENV{"REMOTE_ADDR"});
+      } 
+      if (open(INFILE,$passwdFile)) {
+         while (<INFILE>) {
+            $line = $_;
+            chomp($line);
+            my ($u,$p,$l) = split(/:/,$line);
+            if (defined $u and defined $l and lc($user) eq lc($u)) {
+               $userLevel = $l;
+               last;
+            }
+         }
+         close(INFILE);
+      }
+   }
+   if ($basename =~ /-logout$/) { 
+      &logLine("logout",$user,$params{"LOGOUT"});
+      $user = "guest";
+      $userLevel = "";
+      unlink("$baseDir/cookies/$inFile");
+      %cookies = ();
+      $myCookie = "";
+   }
+} 
+
+# check user name and password, if given
+$NOLOGIN = 0;
+$LOGINFAILED = 1;
+$LOGINSUCCESS = 2;
+$loginStatus = $NOLOGIN;
+if (defined $params{"NAME"} and defined $params{"PASSWD"} and $params{"NAME"} ne "" and $params{"PASSWD"} ne "") {
+   $uTest = lc($params{"NAME"});
+   $uTest =~ s/\W//g;
+   $uTest =~ s/://g;
+   $pTest = $params{"PASSWD"};
+   $pTest = crypt($pTest,"AB");
+   if (open(INFILE,$passwdFile)) {
+      $loginStatus = $LOGINFAILED;
+      while (<INFILE>) {
+         $line = $_;
+         chomp($line);
+         ($u,$p,$l) = split(/:/,$line);
+         if (defined $u and defined $p and $uTest eq lc($u) and $pTest eq $p) {
+            $user = $uTest;
+            $userLevel = $l;
+            $myCookie = &setCookie($user);
+            &logLine("login",$user);
+            $loginStatus = $LOGINSUCCESS;
+            last;
+         }
+      }
+      close(INFILE);
+   }
+} 
+
+# process history deletes
+if (defined $params{"DELETE"}) {
+   if ($date ne "" and $search ne "") { &logLine("delete",$user,$date,$search); }
+   $date = $date1 = $date2 = $search = "";
+   $year1 = $year2 = $month1 = $month2 = $day1 = $day2 = $hour1 = $hour2 = "";
+}
+
+# check running session
+if (defined $session and $session ne "") {
+   if (! -f "/tmp/done.$session") { 
+      if (not $download) { &showWaitingPage($date,$search,$session); }
+   } else {
+      &showHead($date1,$date2,$search);
+      &showResults($date,$search);
+      &showTail();
+   }
+   exit(0);
+}
+
+# search for query word, if present
+if (defined $search and $search ne "") {
+   # check if user wants to download tweets
+   if (defined $download and $download) {
+      &download($date,$search);
+      # do we have search results?
+      if (-s "$cache/$imgFile") { exit(0); }
+      # else start search
+      else {
+         &logLine("search",$user,$date,$search);
+         &searcher($date,$search);
+      }
+   # check cache for earlier results
+   } else {
+      if ($reset) { 
+         &doReset($date,$search);
+      } else {
+         &logLine("search",$user,$date,$search);
+         if (not -s "$cache/$imgFile") { &searcher($date,$search); }
+         &showHead($date1,$date2,$search);
+         &showResults($date,$search);
+         &showTail();
+      }
+      exit(0);
+   }
+}
+
+if ($showCoverage) {
+   &logLine("coverage",$user,$date);
+   &showHead($date1,$date2,"");
+   &showResults($date,"");
+   &showTail();
+   exit(0);
+}
+
+if ((not defined $session or $session eq "") and 
+    (not defined $search or $search eq "")) {
+   # show form and exit
+   &showHead($date1,$date2,"");
+   if (not defined $user or $user eq "" or $user eq "guest") { 
+      &about();
+      &showExamples(); 
+   } else { &showHistory($user); }
+   &showTail();
+   exit(0);
+}
+
+# done
+exit(0);
+
+### START OF SUBROUTINES ###
+
+sub searcher() {
+   my ($date,$search) = @_;
+   my $load = &getLoad();
+   if (0+$load >= $MAXLOAD) {
+      $MESSAGE = "Vanwege de huidige drukte op twiqs.nl (load=$load) kunnen er op dit moment geen nieuwe zoekprocessen worden gestart. Probeert u het over een paar minuten nog een keer.<br> <!-- $user -->";
+      return();
+   }
+   if ($search !~ /,/) {
+      if ($search =~ /^twinl-gender-[fm]$/) {
+         if ($search ne "twinl-gender-f" and $_ = fork) { &startSearchProcess($date,"twinl-gender-f",0); exit(0); }
+         if ($search ne "twinl-gender-m" and $_ = fork) { &startSearchProcess($date,"twinl-gender-m",1); exit(0); }
+         sleep(2);
+         &startSearchProcess($date,$search);
+      } elsif ($search =~ /^twinl-sent-(pos|neg)$/) {
+         if ($search ne "twinl-sent-pos" and $_ = fork) { &startSearchProcess($date,"twinl-sent-pos",0); exit(0); }
+         if ($search ne "twinl-sent-neg" and $_ = fork) { &startSearchProcess($date,"twinl-sent-neg",1); exit(0); }
+         sleep(2);
+         &startSearchProcess($date,$search);
+      } elsif ($search !~ /,/ and $search =~ /^twinl-sent-(pos|neg)\+(.*)$/) {
+         my $keyword = $2;
+         if ($search !~ /^twinl-sent-pos/ and $_ = fork) { &startSearchProcess($date,"twinl-sent-pos+$keyword",1); exit(0); }
+         if ($search !~ /^twinl-sent-neg/ and $_ = fork) { &startSearchProcess($date,"twinl-sent-neg+$keyword",2); exit(0); }
+         sleep(2);
+         &startSearchProcess($date,$search);
+      } elsif ($search =~ /^twinl-age-(17|21|26)$/) {
+         if ($search ne "twinl-age-17" and $_ = fork) { &startSearchProcess($date,"twinl-age-17",0); exit(0); }
+         if ($search ne "twinl-age-21" and $_ = fork) { &startSearchProcess($date,"twinl-age-21",1); exit(0); }
+         if ($search ne "twinl-age-26" and $_ = fork) { &startSearchProcess($date,"twinl-age-26",2); exit(0); }
+         sleep(2);
+         &startSearchProcess($date,$search); 
+      } else { &startSearchProcess($date,$search); }
+   } elsif ($search =~ /,.*,/) {
+      $MESSAGE = "Vanwege mogelijke overbelasting van de server kunnen op dit moment geen queries met meer dan een AND (,) worden uitgevoerd. Start aub de verschillende onderdelen als aparte zoekopdrachten.<br>";                                                                  
+      return();                                                                                                                                                                                                                                                  
+      ####################################
+   } else {
+      my @search = split(/,/,$search);
+      my @sessions = ();
+      for (my $i=0;$i<=$#search;$i++) {
+         if (defined $search[$i] and $search[$i] ne "") { 
+            my $imgFile = "plot.$date.$search[$i].svg";
+            if (not -s "$cache/$imgFile") {
+               my $session = &startSearchProcess($date,$search[$i],$i+1);
+               push(@sessions,$session);
+            }
+         }
+      }
+      my $session = int(1+rand(32768)).".".$$;
+      if ($_ = fork) {
+         # waiting part: show waiting page and exit
+         if (not $download) { &showWaitingPage($date,$search,$session); }
+         $|++;
+         exit(0);
+      }
+      close(STDOUT);
+      open(STDOUT,">>/dev/null");
+      close(STDERR);
+      open(STDERR,">>/dev/null");
+      close(STDIN);
+      open(STDIN,"/dev/null");
+      # wait for processes to finish and combine results
+      my $aggregatorSearch = "\"$search[0]\"";
+      for (my $i=1;$i<=$#search;$i++) { $aggregatorSearch .= ",\"$search[$i]\""; }
+      system("LANG=en_US.UTF-8 aggregator $date $aggregatorSearch @sessions");
+      &makeWebFiles($date,$search,$session);
+   }
+}
+
+sub startSearchProcess() {
+   my ($date,$search,$return) = @_;
+   my $hcache = &makePath($date,$search);
+   $session = int(1+rand(32768)).".".$$;
+   if (defined $return) { $session .= ".".$return; }
+   # do we have a complete earlier search result?
+   if (! system("LANG=en_US.UTF-8 hadoop fs -test -e \"$hcache/_SUCCESS\" 2>/dev/null") == 0) {
+      # do we have an earlier search result?
+      if (system("LANG=en_US.UTF-8 hadoop fs -test -d \"$hcache\" 2>/dev/null") == 0) {
+         if (not $download) {
+            &showHead($date1,$date2,$search); # global variables!
+            print "Het zoekproces is nog bezig... (<a target=\"_parent\" href=\"$url\">home</a>)\n";
+            &showTail();
+         }
+         exit(0);
+      }
+      # hadoop cache does not exist: start waiting process
+      # from : http://www.stonehenge.com/merlyn/LinuxMag/col39.html
+      # split process in computation part and waiting part
+      if ($_ = fork) {
+         # return to calling function, if requested
+         if (defined $return and $return != 0) { return($session); }
+         # waiting part: show waiting page and exit
+         if (not $download) { &showWaitingPage($date,$search,$session); }
+         $|++;
+         exit(0); # or return to calling part
+      }
+      # computation part
+      # close standard file handles to release parent cgi process
+      close(STDOUT);
+      open(STDOUT,">>/dev/null");
+      close(STDERR);
+      open(STDERR,">>/dev/null");
+      close(STDIN);
+      open(STDIN,"/dev/null");
+#################################################################
+      chdir("/home/cloud/java/search");
+      &logLine("hadoop $session ".time()." $user search $date1-$date2 $search");
+      if ($date1 eq $date2 and $search ne $everything and $_ = fork) { &raisePriority($session); exit(0); }
+      if (open(INFILE,"LANG=en_US.UTF-8 make run DATE=\"$date1-$date2\" SEARCH=\"$search\" 2>/tmp/$session.err >/dev/null |")) {
+#     if (open(INFILE,"LANG=en_US.UTF-8 /home/cloud/java/search/runmake \"$date1-$date2\" \"$search\" 2>/tmp/$session.err >/dev/null |")) {
+         close(INFILE);
+      } else { print STDERR "search error!\n"; exit(1); }
+   }
+   &makeWebFiles($date,$search,$session);
+}
+
+sub makeWebFiles() {
+   my ($date,$search,$session) = @_;
+   my $cloudFile = "cloud.$date.$search.txt";
+   my $cloudAllFile = "cloud.$date.$search.all.txt";
+   my $geoFile = "geo.$date.$search.txt";
+   my $mapFile = "map.$date.$search.txt";
+   my $dataFile = "data.$date.$search.txt";
+   my $imgFile = "plot.$date.$search.svg";
+   my $plotFile = "plot.$date.$search.txt";
+   my ($year1,$month1,$day1,$hour1) = &splitDate($date);
+   my @search = split(/,+/,$search);
+   my @geo = ();
+   my $hcache = &makePath($date,$search);
+
+   # check if sentiment map is required and available
+   if ($search =~ /^twinl-geo/ and not -f "$cache/sentmap.${date1}-${date2}.$search.svg") {
+      if ($_ = fork) { system("LANG=en_US.UTF-8 /usr/bin/perl makeSentMap.pl $date1-$date2 \"$search\""); exit(0); }
+   }
+   # process counts
+   my $smooth = 10; # default smoothing: 10 minutes (for day plot)
+   $smooth = int(&diffDate($date)/8640);
+   if (defined $SMOOTH and $SMOOTH > 0) { $smooth = $SMOOTH; }
+   if ($smooth < 1) { $smooth = 1; }
+   my @files = ();
+   for (my $i=0;$i<=$#search;$i++) {
+      push(@files,"$hcache/counts-$search[$i]-r-*"); # add $search[$i] to file name 20121129
+   }
+   for (my $i=0;$i<=$#files;$i++) {
+      if (not open(INFILE,"LANG=en_US.UTF-8 hadoop fs -cat \"$files[$i]\" | /bin/gunzip -c | sort |")) {
+         die "$command: cannot open results file $hcache/$files[$i] !\n";
+      } else {
+         my @results = ();
+         while (<INFILE>) {
+            $line = $_;
+            chomp($line);
+            ($time,$matched,$missed) = split(/\s+/,$line);
+            $matched =~ s/,//g;
+            # while ($time !~ /..../) { $time = "0$time"; }
+            $result = sprintf "%s %f %d %d\n",
+                      $time,$matched/($matched+$missed),$missed,$matched;
+            push(@results,$result);
+         }
+         close(INFILE);
+         # write counts to gnuplot data file
+         if (@results and open(OUTFILE,">$cache/$dataFile.$i")) {
+            print OUTFILE "#dateHourMinute\t#fractionMatched\t#countNonMatched\t#countMatched\t#DATE=$date\t#SEARCHTOKEN=$search\n";
+            @buffer = ();
+            $sum = 0;
+            # use only 700 points in plot file
+            my $plotMax = 700;
+            my $lastPlot = -1;
+            # shift graph one position to the left
+            my $missedStored = 0;
+            my $matchedStored = 0;
+            for (my $i=0;$i<=$#results;$i++) {
+               ($time,$freq,$missed,$matched) = split(/\s+/,$results[$i]);
+               push(@buffer,$freq);
+               $sum += $freq;
+               while ($#buffer > $smooth) { 
+                  $tmp = shift(@buffer); 
+                  $sum -= $tmp;
+               } 
+               # if ($i >= $smooth) { # only plot values based on full buffer
+                  if (int($i*$plotMax/($#results+1)) != $lastPlot) {
+                     printf OUTFILE "%s\t%f\t%d\t%d\n",
+                            "$time",100*$sum/($#buffer+1),$missed+$missedStored,$matched+$matchedStored;
+                     $lastPlot = int($i*$plotMax/($#results+1));
+                     $missedStored = $matchedStored = 0;
+                  } else {
+                     $missedStored += $missed;
+                     $matchedStored += $matched;
+                  }
+               #}
+            } 
+            close(OUTFILE);
+         }
+      }
+   }
+   # make plot file: 20121017: also write to local cache on cloud
+   if (open(OUTFILE,">$cache/$plotFile")) {
+      my $xtics = int(&diffDate($date)/6); # default xtics day was 10800
+      my $secondsPerDay = 86400;
+      my $secondsPerHour = 3600;
+      if ($xtics >= 0.75*$secondsPerDay) { 
+         $xtics = int(0.5+$xtics/$secondsPerDay)*$secondsPerDay; 
+      } elsif ($xtics <= 0.75*$secondsPerDay and $xtics >= 0.75*$secondsPerHour) {
+         $xtics = int(0.5+$xtics/$secondsPerHour)*$secondsPerHour; 
+      }
+      $text = "% van Nederlandstalige tweets";
+      if ($search =~ /^twinl-sent-[a-z]*\+([^,]*)$/) { $text .=  " met $1"; }
+      $column = 2; # plot second column (relative %) unless search=echtalles (column 4=frequency)
+      if ($#files == 0 and $search eq $everything) { 
+         $column = 4;
+         $text = "Nederlandstalige tweets per minuut"; 
+      }
+      print OUTFILE <<THEEND;
+set term svg font 'arial,11' size 640,320
+set xlabel " "
+set ylabel "$text"
+set output "$cache/$imgFile"
+set key top left
+set xtics $xtics # smooth=$smooth
+set pointsize 1
+set title ""
+set xdata time
+set timefmt "%Y%m%d%H%M"
+THEEND
+      print OUTFILE "plot";
+      for (my $i=0;$i<=$#files;$i++) {
+         print OUTFILE " \"$cache/$dataFile.$i\" using 1:$column lw 2 title \"".$search[$i]."\" with lines";
+         if ($i<$#files) { print OUTFILE ","; }
+      }
+      print OUTFILE "\n";
+      close(OUTFILE);
+   }
+
+   # run gnuplot
+   system("LANG=en_US.UTF-8 /usr/bin/gnuplot \"$cache/$plotFile\"");
+   system("LANG=en_US.UTF-8 /bin/mv -f \"$cache/$imgFile\" \"$cache/tmp.$imgFile\"");
+   system("LANG=en_US.UTF-8 /bin/sed 's/<text> */<text>/' < \"$cache/tmp.$imgFile\" > \"$cache/$imgFile\"");
+   unlink("$cache/tmp.$imgFile");
+   if (defined $SMOOTH and $SMOOTH > 0) { return(); }
+   # make geo file
+   # read location positions
+   %locations = ();
+   if (open(INFILE,"/home/cloud/etc/cities.all")) {
+      while (<INFILE>) {
+         $line = $_;
+         chomp($line);
+         if ($line =~ /^Woonplaats,/) { next; } # skip heading line
+         (my $name,$_,$_,my $pos1,my $pos2) = split(/,+/,$line);
+         if (defined $pos2) {
+            my $pos = "$pos1 $pos2";
+            if (defined $pos) { 
+               $name = lc($name);
+               $pos = lc($pos);
+               $name =~ s/^\s*//;
+               $name =~ s/\s*$//;
+               $pos =~ s/^\s*//;
+               $pos =~ s/\s*$//;
+               if ($pos =~ /^\d/) { $locations{$name} = $pos; }
+               elsif (defined  $locations{$pos}) {
+                  $locations{$name} = $locations{$pos}; 
+               }
+            }
+         }
+      }
+      close(INFILE);
+   }
+   @locations = ();
+   if ($search !~ /,/) {
+      my %seen = ();
+      if (open(INFILE,"LANG=en_US.UTF-8 hadoop fs -cat \"$hcache\"/loc-* | /bin/gunzip -c |")) {
+         while (<INFILE>) {
+            my $line = $_;
+            chomp($line);
+            $line = lc($line);
+            $line =~ s/^\s*//;
+            $line =~ s/\s*$//;
+            if (defined $locations{$line}) {
+               if (defined $seen{$line}) { $seen{$line}++; }
+               else {
+                  push(@locations,$line);
+                  $seen{$line} = 1;
+               }
+            } else {
+               my $tmp = $line;
+               $tmp =~ s/\W.*$//;
+               if (defined $locations{$tmp}) {
+                  if (defined $seen{$line}) { $seen{$line}++; }
+                  else {
+                     push(@locations,$line);
+                     $seen{$line} = 1;
+                  }
+               } else {
+                  $tmp = $line;
+                  $tmp =~ s/^.*\W//;
+                  if (defined $locations{$tmp}) {
+                     if (defined $seen{$line}) { $seen{$line}++; }
+                     else {
+                        push(@locations,$line);
+                        $seen{$line} = 1;
+                     }
+                  }
+               }
+            }
+         }
+         close(INFILE);
+      }
+      %gseen = ();
+      if (open(INFILE,"LANG=en_US.UTF-8 hadoop fs -cat \"$hcache\"/geo-* | /bin/gunzip -c |")) {
+         while (<INFILE>) {
+            $line = $_;
+            chomp($line);
+            if (defined $gseen{$line}) { $gseen{$line}++; }
+            else {
+               push(@geo,$line);
+               $gseen{$line} = 1;
+            }
+         }
+         close(INFILE);
+      }
+      if (open(MAPFILE,">$cache/$mapFile")) {
+         open(GEOFILE,">$cache/$geoFile");
+         print GEOFILE "#latitude\t#longitude\t#frequency\t#city\t#DATE=$date\t#SEARCHTOKEN=$search\n";
+         print MAPFILE "lat\tlon\ttitle\tdescription\ticon\ticonSize\ticonOffset\n";
+         my @sorted;
+         for ($i=0;$i<=$#locations;$i++) { $sorted[$i] = $i; }
+         @sorted = sort { $seen{$locations[$sorted[$b]]} <=> $seen{$locations[$sorted[$a]]} } (keys @sorted);
+         for ($i=0;$i<=$#locations;$i++) {
+            if (defined $locations{$locations[$sorted[$i]]}) {
+               ($lat,$long) = split(/\s+/,$locations{$locations[$sorted[$i]]});
+               if (defined $long and $lat ne "0" and $long ne "0") {
+                  # fields title & descriptions not used: it does not look nice
+                  print MAPFILE "$lat	$long			/images/Ol_icon_$colorsTown[0]_example.png	8,8	0,0\n";
+                  print GEOFILE "$lat\t$long\t".$seen{$locations[$sorted[$i]]}."\t".$locations[$sorted[$i]]."\n";
+               }
+            }
+         }
+         for ($i=0;$i<=$#geo;$i++) {
+            ($lat,$long) = split(/\s+/,$geo[$i]);
+            if (defined $long and $lat ne "0" and $long ne "0") {
+               # fields title & descriptions not used: it does not look nice
+               print MAPFILE "$lat	$long			/images/Ol_icon_$colorsGps[0]_example.png	8,8	0,0\n";
+               print GEOFILE "$lat\t$long\t".$gseen{$geo[$i]}."\tgps\n";
+            }
+         }
+         close(GEOFILE);
+         close(MAPFILE);
+      }
+   } else { # create mapFile for multi-word search
+      if (open(MAPFILE,">$cache/$mapFile")) {
+         my @search = split(/,/,$search);
+         print MAPFILE "lat\tlon\ttitle\tdescription\ticon\ticonSize\ticonOffset\n";
+         # process data from single-word files
+         for (my $i=$#search;$i>=0;$i--) {
+            my $mapFile = "map.$date.$search[$i].txt";
+            if (open(INFILE,"$cache/$mapFile")) {
+               <INFILE>; # skip first line
+               while (<INFILE>) {
+                  $line = $_;
+                  chomp($line);
+                  if ($i >= 2) {
+                     $line =~ s/icon_$colorsGps[0]_/icon_$colorsGps[2]_/;
+                     $line =~ s/icon_$colorsTown[0]_/icon_$colorsTown[2]_/;
+                  } elsif ($i == 1) {
+                     $line =~ s/icon_$colorsGps[0]_/icon_$colorsGps[1]_/;
+                     $line =~ s/icon_$colorsTown[0]_/icon_$colorsTown[1]_/;
+                  }
+                  print MAPFILE "$line\n";
+               }
+               close(INFILE);
+            }
+         }
+         close(MAPFILE);
+      }
+      %gseen = ();
+      if (open(INFILE,"LANG=en_US.UTF-8 hadoop fs -cat \"$hcache\"/geo-* | /bin/gunzip -c |")) {
+         while (<INFILE>) {
+            $line = $_;
+            chomp($line);
+            if (defined $gseen{$line}) { $gseen{$line}++; }
+            else {
+               push(@geo,$line);
+               $gseen{$line} = 1;
+            }
+         }
+         close(INFILE);
+      }
+      # 20140518 WARNING: no tweet info here so some tweet locations will be counted more than once!
+      open(GEOFILE,">$cache/$geoFile");
+      print GEOFILE "#latitude\t#longitude\t#frequency\t#city\t#DATE=$date\t#SEARCHTOKEN=$search\n";
+      for ($i=0;$i<=$#geo;$i++) {
+         ($lat,$long) = split(/\s+/,$geo[$i]);
+         if (defined $long and $lat ne "0" and $long ne "0") {
+            # fields title & descriptions not used: it does not look nice
+            print GEOFILE "$lat\t$long\t".$gseen{$geo[$i]}."\tgps\n";
+         }
+      }
+      close(GEOFILE);
+   }
+   # count tweets of OR search
+   if ($search =~ /,/) { &countTweets($date,$search); }
+   # signal that process is finished
+   if (-f "/tmp/$session.err") { system("LANG=en_US.UTF-8 /bin/mv /tmp/$session.err /tmp/done.$session"); }
+   else { system("LANG=en_US.UTF-8 /usr/bin/touch /tmp/done.$session"); }
+   # make sentiment files
+   system("LANG=en_US.UTF-8 /usr/bin/perl /home/cloud/bin/makeSentiment.pl $date1-$date2 \"$search\"");
+   # check if the descriptions are available
+   if (! system("LANG=en_US.UTF-8 hadoop fs -test -e \"$hcache/Description/_SUCCESS\" 2>/dev/null") == 0) {
+      # they are not: check if the directory is available
+      if (system("LANG=en_US.UTF-8 hadoop fs -test -d \"$hcache/Description\" 2>/dev/null") == 0) {
+         # it is: probably a process is running: wait until it finishes
+         my $counter = 0;
+         while ($counter < 720/$sleep and ! system("LANG=en_US.UTF-8 hadoop fs -test -e \"$hcache/Description/_SUCCESS\" 2>/dev/null") == 0) { sleep($sleep); $counter++; }
+         if (! system("LANG=en_US.UTF-8 hadoop fs -test -e \"$hcache/Description/_SUCCESS\" 2>/dev/null") == 0) {
+            # system is stuck: delete directory and rerun
+            system("LANG=en_US.UTF-8 hadoop fs -rm -r \"$hcache/Description\" 2>/dev/null");
+            chdir("/home/cloud/java/description");
+            &logLine("hadoop $session ".time()." $user description $date1-$date2 $search");
+            if ($date1 eq $date2 and $search ne $everything and $_ = fork) { &raisePriority($session); exit(0); }
+            if (open(INFILE,"LANG=en_US.UTF-8 hadoop jar Description.jar nl.sara.hadoop.Description -libjars json-simple-1.1.1.jar,Description.jar \"$hcache\" 2>/tmp/$session.err >/dev/null |")) {
+               close(INFILE);
+               unlink("/tmp/$session.err");
+            } else { print STDERR "run error for Description (1.5)!\n"; exit(1); }
+         }
+         &makeDescPies($date,$search);
+      } else {
+         if ($_ = fork) { 
+            # hadoop cache does not exist
+            $session = int(1+rand(32768)).".".$$;
+            chdir("/home/cloud/java/description");
+            &logLine("hadoop $session ".time()." $user description $date1-$date2 $search");
+            if ($date1 eq $date2 and $search ne $everything and $_ = fork) { &raisePriority($session); exit(0); }
+            if (open(INFILE,"LANG=en_US.UTF-8 hadoop jar Description.jar nl.sara.hadoop.Description -libjars json-simple-1.1.1.jar,Description.jar \"$hcache\" 2>/tmp/$session.err >/dev/null |")) {
+               close(INFILE);
+               unlink("/tmp/$session.err");
+            } else { print STDERR "run error for Description (1)!\n"; exit(1); }
+            &makeDescPies($date,$search);
+            exit(0);
+         }
+      }
+   } else { &makeDescPies($date,$search); }
+   # check if experts are available
+   if (! system("LANG=en_US.UTF-8 hadoop fs -test -e \"$hcache/Experts/_SUCCESS\" 2>/dev/null") == 0) {
+      # they are not: check if the directory is available
+      if (system("LANG=en_US.UTF-8 hadoop fs -test -d \"$hcache/Experts\" 2>/dev/null") == 0) {
+         # it is: probably a process is running: wait until it finishes
+         my $counter = 0;
+         while ($counter < 720/$sleep and ! system("LANG=en_US.UTF-8 hadoop fs -test -e \"$hcache/Experts/_SUCCESS\" 2>/dev/null") == 0) { sleep($sleep); $counter++; }
+         if (! system("LANG=en_US.UTF-8 hadoop fs -test -e \"$hcache/Experts/_SUCCESS\" 2>/dev/null") == 0) {
+            # system is stuck: delete directory and rerun
+            system("LANG=en_US.UTF-8 hadoop fs -rm -r \"$hcache/Experts\" 2>/dev/null");
+            &makeExperts($date,$search);
+#           chdir("/home/cloud/java/experts");
+#           &logLine("hadoop $session ".time()." $user users $date1-$date2 $search");
+#           if ($date1 eq $date2 and $search ne $everything and $_ = fork) { &raisePriority($session); exit(0); }
+#           if (open(INFILE,"LANG=en_US.UTF-8 hadoop jar Experts.jar nl.sara.hadoop.Experts -libjars json-simple-1.1.1.jar,Experts.jar \"$hcache\" 2>/tmp/$session.err >/dev/null |")) {
+#              close(INFILE);
+#              unlink("/tmp/$session.err");
+#           } else { print STDERR "run error for Experts (1.5)!\n"; exit(1); }
+         }
+      } else {
+         if ($_ = fork) {
+            # hadoop cache does not exist
+            $session = int(1+rand(32768)).".".$$;
+            chdir("/home/cloud/java/experts");
+            &logLine("hadoop $session ".time()." $user users $date1-$date2 $search");
+            &makeExperts($date,$search);
+#           if ($date1 eq $date2 and $search ne $everything and $_ = fork) { &raisePriority($session); exit(0); }
+#           if (open(INFILE,"LANG=en_US.UTF-8 hadoop jar Experts.jar nl.sara.hadoop.Experts -libjars json-simple-1.1.1.jar,Experts.jar \"$hcache\" 2>/tmp/$session.err >/dev/null |")) {
+#              close(INFILE);
+#              unlink("/tmp/$session.err");
+#           } else { print STDERR "run error for Experts (1)!\n"; exit(1); }
+            exit(0);
+         }
+      }
+   }
+   # count words, in case this has not been done yet
+   if (! system("LANG=en_US.UTF-8 hadoop fs -test -e \"$hcache/CountWords/_SUCCESS\" 2>/dev/null") == 0) {
+      if (system("LANG=en_US.UTF-8 hadoop fs -test -d \"$hcache/CountWords\" 2>/dev/null") == 0) {
+         my $counter = 0;
+         while ($counter < 720/$sleep and ! system("LANG=en_US.UTF-8 hadoop fs -test -e \"$hcache/CountWords/_SUCCESS\" 2>/dev/null") == 0) { sleep($sleep); $counter++; }
+         if (! system("LANG=en_US.UTF-8 hadoop fs -test -e \"$hcache/CountWords/_SUCCESS\" 2>/dev/null") == 0) {
+            # system is stuck: delete directory and rerun
+            system("LANG=en_US.UTF-8 hadoop fs -rm -r \"$hcache/CountWords\" 2>/dev/null");
+            chdir("/home/cloud/java/countwords");
+            &logLine("hadoop $session ".time()." $user countwords $date1-$date2 $search");
+            if ($date1 eq $date2 and $search ne $everything and $_ = fork) { &raisePriority($session); exit(0); }
+            if (open(INFILE,"LANG=en_US.UTF-8 hadoop jar CountWords.jar nl.sara.hadoop.CountWords -libjars CountWords.jar \"$hcache\" 2>/tmp/$session.err >/dev/null |")) {
+               close(INFILE);
+               unlink("/tmp/$session.err");
+            } else { print STDERR "run error for CountWords (1)!\n"; exit(1); }
+         }
+      } else {
+         # hadoop cache does not exist
+         $session = int(1+rand(32768)).".".$$;
+         chdir("/home/cloud/java/countwords");
+         &logLine("hadoop $session ".time()." $user countwords $date1-$date2 $search");
+         if ($date1 eq $date2 and $search ne $everything and $_ = fork) { &raisePriority($session); exit(0); }
+         if (open(INFILE,"LANG=en_US.UTF-8 hadoop jar CountWords.jar nl.sara.hadoop.CountWords -libjars CountWords.jar \"$hcache\" 2>/tmp/$session.err >/dev/null |")) {
+            close(INFILE);
+            unlink("/tmp/$session.err");
+         } else { print STDERR "run error for CountWords (1)!\n"; exit(1); }
+      }
+   }
+   if ($search =~ /^twinl-age-(17|21|26)$/) {
+      if ($search eq "twinl-age-17") { &searcher($date,"twinl-age-21,twinl-age-26"); }
+      elsif ($search eq "twinl-age-21") { &searcher($date,"twinl-age-17,twinl-age-26"); }
+      elsif ($search eq "twinl-age-26") { &searcher($date,"twinl-age-17,twinl-age-21"); }
+   } else {
+      # tokenize this day, in case this has not been done yet
+      $path = "cache/$year1/$month1/$day1";
+      if (! system("LANG=en_US.UTF-8 hadoop fs -test -e \"$path/Tokenizer/_SUCCESS\" 2>/dev/null") == 0) {
+         if (system("LANG=en_US.UTF-8 hadoop fs -test -d \"$path/Tokenizer\" 2>/dev/null") == 0) {
+            my $counter = 0;
+            while ($counter < 720/$sleep and ! system("LANG=en_US.UTF-8 hadoop fs -test -e \"$path/Tokenizer/_SUCCESS\" 2>/dev/null") == 0) { sleep($sleep); $counter++; }
+            if (! system("LANG=en_US.UTF-8 hadoop fs -test -e \"$path/Tokenizer/_SUCCESS\" 2>/dev/null") == 0) {
+               # system is stuck: delete directory and rerun
+               system("LANG=en_US.UTF-8 hadoop fs -rm -r \"$hcache/Tokenizer\" 2>/dev/null");
+               chdir("/home/cloud/java/tokenizer");
+               $path =~ s/cache/twitter/;
+               &logLine("hadoop $session ".time()." $user tokenizer $date1-$date2 $search");
+               if ($date1 eq $date2 and $search ne $everything and $_ = fork) { &raisePriority($session); exit(0); }
+               if (open(INFILE,"LANG=en_US.UTF-8 hadoop jar Tokenizer.jar nl.sara.hadoop.Tokenizer -libjars json-simple-1.1.1.jar,Tokenizer.jar \"$path\" 2>/tmp/$session.err >/dev/null |")) {
+                  close(INFILE);
+                  unlink("/tmp/$session.err");
+               } else { print STDERR "run error for Tokenizer!\n"; exit(1); }
+               $path =~ s/twitter/cache/;
+            }
+         } else {
+            # hadoop cache does not exist
+            $session = int(1+rand(32768)).".".$$;
+            chdir("/home/cloud/java/tokenizer");
+            $path =~ s/cache/twitter/;
+            &logLine("hadoop $session ".time()." $user tokenizer $date1-$date2 $search");
+            if ($date1 eq $date2 and $search ne $everything and $_ = fork) { &raisePriority($session); exit(0); }
+            if (open(INFILE,"LANG=en_US.UTF-8 hadoop jar Tokenizer.jar nl.sara.hadoop.Tokenizer -libjars json-simple-1.1.1.jar,Tokenizer.jar \"$path\" 2>/tmp/$session.err >/dev/null |")) {
+               close(INFILE);
+               unlink("/tmp/$session.err");
+            } else { print STDERR "run error for Tokenizer!\n"; exit(1); }
+            $path =~ s/twitter/cache/;
+         }
+      }
+      # count words of this day, in case this has not been done yet
+      $path .= "/Tokenizer";
+      if (! system("LANG=en_US.UTF-8 hadoop fs -test -e \"$path/CountWords/_SUCCESS\" 2>/dev/null") == 0) {
+         if (system("LANG=en_US.UTF-8 hadoop fs -test -d \"$path/CountWords\" 2>/dev/null") == 0) {
+            my $counter = 0;
+            while ($counter < 720/$sleep and ! system("LANG=en_US.UTF-8 hadoop fs -test -e \"$path/CountWords/_SUCCESS\" 2>/dev/null") == 0) { sleep($sleep); $counter++; }
+            if (! system("LANG=en_US.UTF-8 hadoop fs -test -e \"$path/CountWords/_SUCCESS\" 2>/dev/null") == 0) {
+               # system is stuck: delete directory and rerun
+               system("LANG=en_US.UTF-8 hadoop fs -rm -r \"$hcache/CountWords\" 2>/dev/null");
+               chdir("/home/cloud/java/countwords");
+               &logLine("hadoop $session ".time()." $user countwords $date1-$date2 $search");
+               if ($date1 eq $date2 and $search ne $everything and $_ = fork) { &raisePriority($session); exit(0); }
+               if (open(INFILE,"LANG=en_US.UTF-8 hadoop jar CountWords.jar nl.sara.hadoop.CountWords -libjars CountWords.jar \"$path\" 2>/tmp/$session.err >/dev/null |")) {
+                  close(INFILE);
+                  unlink("/tmp/$session.err");
+               } else { print STDERR "run error for CountWords (2)!\n"; exit(1); }
+            }
+         } else {
+            # hadoop cache does not exist
+            $session = int(1+rand(32768)).".".$$;
+            chdir("/home/cloud/java/countwords");
+            &logLine("hadoop $session ".time()." $user countwords $date1-$date2 $search");
+            if ($date1 eq $date2 and $search ne $everything and $_ = fork) { &raisePriority($session); exit(0); }
+            if (open(INFILE,"LANG=en_US.UTF-8 hadoop jar CountWords.jar nl.sara.hadoop.CountWords -libjars CountWords.jar \"$path\" 2>/tmp/$session.err >/dev/null |")) {
+               close(INFILE);
+               unlink("/tmp/$session.err");
+            } else { print STDERR "run error for CountWords (2)!\n"; exit(1); }
+         }
+      }
+   }
+   my ($yesterdayY,$yesterdayM,$yesterdayD) = &yesterday($year1,$month1,$day1);
+   $path = "$yesterdayY/$yesterdayM/$yesterdayD/Tokenizer/CountWords";
+   my $subtract = "no";
+   if ($search eq "twinl-sent-pos") { $path = "$date/Search/twinl-sent-neg/CountWords"; $subtract = "no"; }
+   if ($search eq "twinl-sent-neg") { $path = "$date/Search/twinl-sent-pos/CountWords"; $subtract = "no"; }
+   if ($search =~ /^twinl-sent-pos\+(.*)$/) { $path = "$date/Search/twinl-sent-neg+$1/CountWords"; $subtract = "no"; }
+   if ($search =~ /^twinl-sent-neg\+(.*)$/) { $path = "$date/Search/twinl-sent-pos+$1/CountWords"; $subtract = "no"; }
+   if ($search eq "twinl-gender-f") { $path = "$date/Search/twinl-gender-m/CountWords"; $subtract = "no"; }
+   if ($search eq "twinl-gender-m") { $path = "$date/Search/twinl-gender-f/CountWords"; $subtract = "no"; }
+   if ($search eq "twinl-age-17") { $path = "$date/Search/twinl-age-21,twinl-age-26/CountWords"; $subtract = "no"; }
+   if ($search eq "twinl-age-21") { $path = "$date/Search/twinl-age-17,twinl-age-26/CountWords"; $subtract = "no"; }
+   if ($search eq "twinl-age-26") { $path = "$date/Search/twinl-age-17,twinl-age-21/CountWords"; $subtract = "no"; }
+   if (! system("LANG=en_US.UTF-8 hadoop fs -test -e \"$hcache/CountWords/TTest/$path/TTest/_SUCCESS\" 2>/dev/null") == 0) {
+      if (system("LANG=en_US.UTF-8 hadoop fs -test -d \"$hcache/CountWords/TTest/$path/TTest\" 2>/dev/null") == 0) {
+         my $counter = 0;
+         while ($counter < 720/$sleep and ! system("LANG=en_US.UTF-8 hadoop fs -test -e \"$hcache/CountWords/TTest/$path/TTest/_SUCCESS\" 2>/dev/null") == 0) { sleep($sleep); $counter++; }
+         if (! system("LANG=en_US.UTF-8 hadoop fs -test -e \"$hcache/CountWords/TTest/$path/TTest/_SUCCESS\" 2>/dev/null") == 0) {
+            # system is stuck: delete directory and rerun
+            system("LANG=en_US.UTF-8 hadoop fs -rm -r \"$hcache/CountWords/TTest/$path/TTest\" 2>/dev/null");
+            chdir("/home/cloud/java/ttest");
+            &logLine("hadoop $session ".time()." $user ttest $date1-$date2 $search");
+            if ($date1 eq $date2 and $search ne $everything and $_ = fork) { &raisePriority($session); exit(0); }
+            ($typesQuery,$tokensQuery) = &getTypesAndTokens("$hcache/CountWords");
+            ($typesReference,$tokensReference) = &getTypesAndTokens("cache/$path");
+            if (open(INFILE,"hadoop jar TTest.jar nl.sara.hadoop.TTest -libjars TTest.jar \"$hcache/CountWords/part-r-00000.gz\" \"cache/$path/part-r-00000.gz\" $typesQuery $tokensQuery $typesReference $tokensReference $subtract 2>/tmp/$session.err >/dev/null |")) {
+               close(INFILE);
+               unlink("/tmp/$session.err");
+            } else { print STDERR "run error for CountWords (2)!\n"; exit(1); }
+            &makeCloud($date,$search);
+         }
+      } else {
+         # hadoop cache does not exist
+         $session = int(1+rand(32768)).".".$$;
+         chdir("/home/cloud/java/ttest");
+         &logLine("hadoop $session ".time()." $user ttest $date1-$date2 $search");
+         if ($date1 eq $date2 and $search ne $everything and $_ = fork) { &raisePriority($session); exit(0); }
+         ($typesQuery,$tokensQuery) = &getTypesAndTokens("$hcache/CountWords");
+         ($typesReference,$tokensReference) = &getTypesAndTokens("cache/$path");
+         if (open(INFILE,"hadoop jar TTest.jar nl.sara.hadoop.TTest -libjars TTest.jar \"$hcache/CountWords/part-r-00000.gz\" \"cache/$path/part-r-00000.gz\" $typesQuery $tokensQuery $typesReference $tokensReference $subtract 2>/tmp/$session.err >/dev/null |")) {
+            close(INFILE);
+            unlink("/tmp/$session.err");
+         } else { print STDERR "run error for CountWords (2)!\n"; exit(1); }
+         &makeCloud($date,$search);
+      }
+   }
+   if (open(INFILE,"/home/cloud/bin/summarize \"cache/$date/Search/$search\"|")) {
+     close(INFILE);
+   } else { 
+      print STDERR "problem with summarizing cache/$date/Search/$search!\n"; 
+   }
+
+   # done
+   return();
+}
+
+sub sentimentOverview() {
+   my @history = @_;
+   my %seen = ();
+   my $found = 0;
+   my $firstLine = "<hr>\n<p>\nZoekgeschiedenis van gebruiker $user (<a href=\"$url\">normaal beeld</a>):\n<p>\n<table>\n";
+   for (my $i=$#history;($i>=0 && $found < 30);$i--) {
+      my @fields = split(/\s+/,$history[$i]);
+      shift(@fields); shift(@fields); shift(@fields); # day time ip
+      my $task = shift(@fields);
+      shift(@fields); # user
+      my $date = shift(@fields);
+      my $search = join(" ",@fields);
+      if (defined $seen{lc("$date $search")}) { next; }
+      $seen{lc("$date $search")} = 1;
+      my $searchUrl = $search;
+      $searchUrl =~ s/\+/%2B/g;
+      $searchUrl =~ s/#/%23/g;
+      if ($task eq "delete") { next; }
+      my $imgFile = "sentiment.$date.$search.svg";
+      my $dataFile = "sentiment.$date.$search.data";
+      if (! -f "$cache/$imgFile") { next; }
+      if (! open(INFILE,"$cache/$dataFile")) { next; }
+      my $sentiment = <INFILE>;
+      if (not defined $sentiment) { next; }
+      chomp($sentiment);
+      close(INFILE);
+      if ($sentiment >= 0) { $sentiment = sprintf "%d",(0.5+100*$sentiment); }
+      else { $sentiment = sprintf "%d",(-0.5+100*$sentiment); }
+      if ($sentiment > 0) { $sentiment = "+".$sentiment; }
+      if ($firstLine ne "") { print $firstLine; $firstLine = ""; }
+      if ($found == 5*int($found/5)) { print "<tr>\n"; }
+      my $safeImg = $imgFile;
+      $safeImg =~ s/\+/%2B/g;
+      $safeImg =~ s/#/%23/g;
+      print <<THEEND;
+<td>
+</td>
+<td>
+<p style="text-align: center;">
+<br>
+<a target="_parent" href="$command?SEARCH=$searchUrl\&DATE=$date" style="text-decoration:none; outline:none; color:#000000"><strong>$search</strong>: $sentiment</a>
+<br>
+<object data="/cache/$safeImg" type="image/svg+xml" width="135" height="100" border="0"></object>
+</td>
+THEEND
+      $found++;
+   }
+   if ($firstLine eq "") { print "</table>\n"; }
+}
+
+sub showHistory() {
+   my $user = shift(@_);
+   if (not defined $user or $user eq "" or $user eq "guest") { &showExamples(); return(); }
+   my $USERFIELD = 4;
+   my $TASKFIELD = 3;
+   my @history = ();
+   if (open(LOGFILE,"$userDir/$user")) {
+      while (<LOGFILE>) {
+         $line = $_;
+         chomp($line);
+         my @fields = split(/\s+/,$line);
+         if (defined $fields[$USERFIELD] and $fields[$USERFIELD] eq $user and
+             $fields[$TASKFIELD] =~ /^(delete|reset|search)$/) {
+            push(@history,$line);
+         }
+      }
+      close(INFILE);
+   }
+   if (not @history) { &showExamples(); }
+   elsif ($sentimentOverview) { &sentimentOverview(@history); }
+   else {
+      my $firstLine = "<hr>\n<p>\nZoekgeschiedenis van gebruiker $user (<a href=\"$url?SENTIMENTOVERVIEW=1\">sentimentbeeld</a>):\n<p>\n<ul>\n";
+      my %seen = ();
+      for (my $i=$#history;$i>=0;$i--) {
+         my @fields = split(/\s+/,$history[$i]);
+         shift(@fields); shift(@fields); shift(@fields); # day time ip
+         my $task = shift(@fields);
+         shift(@fields); # user
+         my $date = shift(@fields);
+         my $search = join(" ",@fields);
+         if (defined $seen{lc("$date $search")}) { next; }
+         my $searchUrl = $search;
+         $searchUrl =~ s/\+/%2B/g;
+         $searchUrl =~ s/#/%23/g;
+         $seen{lc("$date $search")} = 1;
+         if ($task eq "delete") { next; }
+         if ($firstLine ne "") { print $firstLine; $firstLine = ""; }
+         print <<THEEND;
+<li> <a target="_parent" href="$command?SEARCH=$searchUrl\&DATE=$date">"$search"
+THEEND
+         my ($date1,$date2) = split(/-/,$date);
+         my ($y1,$m1,$d1,$h1,$y2,$m2,$d2,$h2) = &splitDate($date);
+         if (not defined $date2 or $date2 eq "") { print " $date</a>\n"; }
+         elsif ($date1 eq $date2) { 
+            print "op $d1 ".$months[$m1-1]." $y1, $h1:00-$h1:59</a>\n"; 
+         } elsif ($y1 == $y2 and $m1 == $m2 and $d1 == $d2 and $h1 == 0 and $h2 == 23) {
+            print "op $d1 ".$months[$m1-1]." $y1</a>\n"; 
+         } elsif ($y1 == $y2 and $m1 == $m2 and $d1 == 1 and $d2 == &maxDays($y2,$m2) and $h1 == 0 and $h2 == 23) {
+            print "in ".$months[$m1-1]." $y1</a>\n"; 
+         } elsif ($y1 == $y2 and $m1 == 1 and $m2 == 12 and $d1 == 1 and $d2 == &maxDays($y2,$m2) and $h1 == 0 and $h2 == 23) {
+            print "in $y1</a>\n"; 
+         } else { 
+            print "op $date</a>\n"; 
+         }
+         print <<THEEND;
+<a target="_parent" href="$command?SEARCH=$searchUrl\&DATE=$date\&DELETE" title="verwijder"><img src="/images/Ol_icon_red_example.png" width="10" height="10" alt="verwijder" border="0"></a>
+<a target="_parent" href="$command?SEARCH=$searchUrl\&DATE=$date\&RESET"  title="herhaal"><img src="/images/herhaal.png" width="10" height="10" alt="herhaal" border="0"></a>
+THEEND
+      }
+      if ($firstLine eq "") { print "</ul>\n"; }
+      else { &showExamples(); }
+   }
+} 
+
+# show some examples
+sub showExamples() {
+   print <<THEEND;
+<hr>
+<p>
+Voorbeelden:
+<p>
+<ul>
+<li> <a target="_parent" href="$command?SEARCH=mh17\&DATE=2014071700-2014071723">"mh17" op donderdag 17 juli 2014</a> (grafiek)
+<li> <a target="_parent" href="$command?SEARCH=koningsdag\&DATE=2014042600-2014042623&SHOWHEATMAP">"koningsdag" op zaterdag 26 april 2014</a> (kaart)
+<li> <a target="_parent" href="$command?SEARCH=ajax,pec\&DATE=2014042000-2014042023">"ajax,pec" op zondag 20 april 2014</a> (grafiek)
+<li> <a target="_parent" href="$command?SEARCH=nagels\&DATE=2014090100-2014093023\&SHOWUSERS">"nagels" in september 2014</a> (gebruikersinformatie)
+<li> <a target="_parent" href="$command?SEARCH=hedde&DATE=2014070100-2014093023&SHOWHEATMAP">"hedde" in juli-september 2014</a> (kaart voor dialectwoord)
+<li> <a target="_parent" href="$command?SEARCH=zwarte%20piet&DATE=2014090100-2014093023&SHOWCLOUD">"zwarte piet" in september 2014</a> (woordenwolk)
+</ul>
+THEEND
+}
+
+# show results of search
+sub showResults() {
+   my ($date,$search) = @_;
+   my @search = split(/,/,$search);
+   my $totalMissed = 0;
+   my $totalMatched = 0;
+   # show menu
+   my $searchUrl = $search;
+   $searchUrl =~ s/\+/%2B/g;
+   $searchUrl =~ s/#/%23/g;
+   print <<THEEND;
+<hr>
+<ul class="menu">
+<li class="menu"> <a class="menu" target="_parent" href="$command?SEARCH=$searchUrl\&DATE=$date">Grafiek</a>
+<li class="menu"> <a class="menu" target="_parent" href="$command?SEARCH=$searchUrl\&DATE=$date\&SHOWHEATMAP">Kaart</a>
+<li class="menu"> <a class="menu" target="_parent" href="$command?SEARCH=$searchUrl\&DATE=$date\&SHOWCLOUD">Woorden</a>
+<li class="menu"> <a class="menu" target="_parent" href="$command?SEARCH=$searchUrl\&DATE=$date\&SHOWUSERS">Gebruikers</a>
+<li class="menu"> <a class="menu" target="_parent" href="$command?SEARCH=$searchUrl\&DATE=$date\&SHOWTWEETS">Tweets</a>
+THEEND
+#   if ($date =~/^$today/ or &localClient()) {
+#      print <<THEEND; 
+#<li class="menu"> <a class="menu" target="_parent" href="$command?SEARCH=$search\&DATE=$date\&RESET">Reset</a>
+#THEEND
+#   }
+   print <<THEEND; 
+<li class="menu"> <a class="menu" target="_parent" href="$command">Home</a>
+</ul>
+THEEND
+   # get counts for summary line
+   for (my $i=0;$i<=$#search;$i++) {
+      if (open(INFILE,"$cache/$dataFile.$i")) {
+         while (<INFILE>) {
+            my $line = $_;
+            chomp($line);
+            if ($line =~ /^\s*#/) { next; }
+            ($_,$_,$missed,$matched) = split(/\s+/,$line);
+            $totalMissed += $missed;
+            $totalMatched += $matched;
+         }
+         close(INFILE);
+      }
+   }
+   if (not $showCoverage) {
+      if ($totalMissed <= 0 and $totalMatched <= 0) { print  "<p>\nGeen data beschikbaar voor deze zoekopdracht.\n"; return(); }
+      else {
+         $factor = 1;
+         $perc = 0;
+         my $total = ($totalMissed+$totalMatched)/($#search+1);
+         if ($search =~ /,/) { $totalMatched = &countTweets($date,$search); }
+         if ($totalMatched > 0) {
+            $perc = sprintf "%d",
+                    int(0.5/$factor+$totalMatched*100*$factor/$total);
+            while ($perc == 0) {
+               $factor *= 10;
+               $perc = sprintf "%d",
+                       int(0.5/$factor+$totalMatched*100*$factor/$total);
+            }
+         }
+         printf "<p>\nGezocht in: ".&prettyNumber(int($total)); # why do we need int() here for or-tweets?
+         printf " tweets. Gevonden: ".&prettyNumber(int($totalMatched))." tweet";
+         if (int($totalMatched) != 1) { print "s"; }
+         if ($search !~ /^twinl-/) { print " met het trefwoord "; }
+         else { print " van de categorie "; }
+         if ($#search == 0) { print "\"$search\""; }
+         else { 
+            for (my $i=0;$i<=$#search;$i++) {
+               print "\"$search[$i]\" ";
+               if ($showMap) {
+                  if ($i >= 2) {
+                     print <<THEEND;
+(<img src="/images/Ol_icon_$colorsGps[2]_example.png" width="8" height="8" alt="$colorsGps[2]"/>
+<img src="/images/Ol_icon_$colorsTown[2]_example.png" width="8" height="8" alt="$colorsTown[2]"/>)
+THEEND
+                  } else {
+                     print <<THEEND;
+(<img src="/images/Ol_icon_$colorsGps[$i]_example.png" width="8" height="8" alt="$colorsGps[$i]"/>
+<img src="/images/Ol_icon_$colorsTown[$i]_example.png" width="8" height="8" alt="$colorsTown[$i]"/>)
+THEEND
+                  }
+               } 
+               if ($i != $#search) { print "of "; } 
+            }
+         }
+         printf " (%s%%).\n", $perc/$factor;
+      }
+   }
+   close(INFILE);
+   if ($totalMatched <= 0 and not $showCoverage) { return(); }
+   if ($showTweets) { &showTweets($date,$search,$selectedHour,$selectedDay,$selectedMinute); }
+   elsif ($showOriginals) { &showOriginals($date,$search,$selectedHour,$selectedDay,$selectedMinute); }
+   elsif ($showCloud) { &showCloud($date,$search); &showSentiment($date,$search); }
+   elsif ($showExperts) { &showDesc($date,$search); &showExperts($date,$search); }
+   elsif ($showGraph) {
+      if (not -s "$cache/$imgFile") { print "<p>\nGeen informatie gevonden\n"; }
+      else {
+         if (defined $SMOOTH and $SMOOTH > 0) { &makeWebFiles($date,$search); } # smooth specified: regenerate graph
+         # insert plot image in web page
+         my $safeImg = $imgFile;
+         $safeImg =~ s/\+/%2B/g;
+         $safeImg =~ s/#/%23/g;
+         print <<THEEND;
+<p>
+<object data="/cache/$safeImg" type="image/svg+xml" width="710" height="350"></object>
+<p>
+THEEND
+         if ($search !~ /,/) {
+            my $searchUrl = $search;
+            $searchUrl =~ s/\+/%2B/g;
+            $searchUrl =~ s/#/%23/g;
+            print <<THEEND;
+<small>(<a target="_parent" href="$url?DATE=$date\&SEARCH=$searchUrl\&DOWNLOAD\&SHOWGRAPH">download data van grafiek</a>)</small>
+THEEND
+         } else {
+            my @search = split(/,+/,$search);
+            print "<small>(download data van grafiek: ";
+            for (my $i=0;$i<=$#search;$i++) {
+               my $searchUrl = $search[$i];
+               $searchUrl =~ s/\+/%2B/g;
+               $searchUrl =~ s/#/%23/g;
+               print <<THEEND;
+<a target="_parent" href="$url?DATE=$date\&SEARCH=$searchUrl\&DOWNLOAD\&SHOWGRAPH">$search[$i]</a>
+THEEND
+               if ($i < $#search) { print ", "; }
+            }
+            print ")</small>\n";
+         }
+         # read and show smooth factor
+         my $plotFile = "plot.$date.$search.txt";
+         if (open(INFILE,"$cache/$plotFile")) {
+             my $smooth = -1;
+             while (<INFILE>) {
+                $line = $_;
+                chomp($line);
+                if ($line =~ /smooth=(\d+)/) { $smooth = $1; }
+            }
+            close(INFILE);
+            if ($smooth > 0 and $totalMatched > 0) {
+               my $halfSmooth = int(0.5*$smooth);
+               my $doubleSmooth = int(1.5*$smooth);
+               my $searchUrl = $search;
+               $searchUrl =~ s/\+/%2B/g;
+               $searchUrl =~ s/#/%23/g;
+               print <<THEEND;
+<p>
+<small>
+(smoothfactor: $smooth;
+<a href="$url?DATE=$date\&SEARCH=$searchUrl\&SMOOTH=$halfSmooth">verlagen</a>;
+<a href="$url?DATE=$date\&SEARCH=$searchUrl\&SMOOTH=$doubleSmooth">verhogen</a>)
+</small>
+THEEND
+            }
+         }
+      }
+   } elsif ($showCoverage) {
+      if (not -s "$cache/$imgCoverage") { &makeCoverage($date); }
+      if (not -s "$cache/$imgCoverage") { print "<p>\nGeen informatie gevonden\n"; }
+      else {
+         if (open(INFILE,"$cache/$totalCoverage")) {
+            my $line = <INFILE>;
+            close(INFILE);
+            chomp($line);
+            my ($allTrack,$allEstimated) = split(/\s+/,$line);
+            if (defined $allEstimated and $allEstimated > 0) {
+               my $sSuffix = ($allEstimated != 1) ? "s" : "";
+               printf "<p>\nGevonden %s van %s tweet$sSuffix (%d%%).\n",
+                  &prettyNumber($allTrack),&prettyNumber($allEstimated),100*$allTrack/$allEstimated;
+            }
+         }
+         # insert plot image in web page
+         print <<THEEND;
+<p>
+<object data="/cache/$imgCoverage" type="image/svg+xml" width="710" height="350"></object>
+<p>
+THEEND
+         print <<THEEND;
+<small>(<a target="_parent" href="$url?DATE=$date\&DOWNLOAD\&SHOWCOVERAGE">download data van grafiek</a>)</small>
+THEEND
+      }
+   } elsif ($showDesc) { 
+      &showDesc($date,$search);
+   } elsif ($showMap) {
+      # show map
+      print <<THEEND;
+<div id="mapdiv" style="width:480px;height:600px;margin:10px;"></div>
+<div style="clear:both;"></div>
+<script src="http://www.openlayers.org/api/OpenLayers.js"></script>
+<script>
+  map = new OpenLayers.Map("mapdiv");
+  map.addLayer(new OpenLayers.Layer.OSM());
+
+  var pois = new OpenLayers.Layer.Text( "My Points",
+                  { location:"/cache/$mapFile",
+                    projection: map.displayProjection
+                  });
+  map.addLayer(pois);
+
+  //Set start centrepoint and zoom
+  var lonLat = new OpenLayers.LonLat( 5.0, 52.0 )
+        .transform(
+          new OpenLayers.Projection("EPSG:4326"), // transform from WGS 1984
+          map.getProjectionObject() // to Spherical Mercator Projection
+        );
+  var zoom=7;
+  map.setCenter (lonLat, zoom);
+
+</script>
+<p>
+THEEND
+      my @search = split(/,/,$search);
+      print <<THEEND;
+<img src="/images/Ol_icon_$colorsGps[0]_example.png" width="8" height="8" alt="$colorsGps[0]"/>
+THEEND
+      if ($#search > 0) { print <<THEEND;
+<img src="/images/Ol_icon_$colorsGps[1]_example.png" width="8" height="8" alt="$colorsGps[1]"/>
+THEEND
+      }
+      if ($#search > 1) { print <<THEEND;
+<img src="/images/Ol_icon_$colorsGps[2]_example.png" width="8" height="8" alt="$colorsGps[2]"/>
+THEEND
+      }
+      print ": gebaseerd op GPS-locatie; ";
+      print <<THEEND;
+<img src="/images/Ol_icon_$colorsTown[0]_example.png" width="8" height="8" alt="$colorsTown[0]"/>
+THEEND
+      if ($#search > 0) { print <<THEEND;
+<img src="/images/Ol_icon_$colorsTown[1]_example.png" width="8" height="8" alt="$colorsTown[1]"/>
+THEEND
+      }
+      if ($#search > 1) { print <<THEEND;
+<img src="/images/Ol_icon_$colorsTown[2]_example.png" width="8" height="8" alt="$colorsTown[2]"/>
+THEEND
+      }
+      print ": gebaseerd op plaatsnaam in profiel\n";
+      my $searchUrl = $search;
+      $searchUrl =~ s/\+/%2B/g;
+      $searchUrl =~ s/#/%23/g;
+      if ($#search == 0) { 
+         print <<THEEND;
+<p>
+<small>(<a target="_parent" href="$url?DATE=$date\&SEARCH=$searchUrl\&DOWNLOAD\&SHOWMAP">download data van kaart</a>)</small>
+THEEND
+      } else {
+         print "<p>\n<small>(download data van kaart: ";
+         for ($i=0;$i<=$#search;$i++) {
+            my $searchUrl = $search[$i];
+            $searchUrl =~ s/\+/%2B/g;
+            $searchUrl =~ s/#/%23/g;
+            print <<THEEND;
+<a target="_parent" href="$url?DATE=$date\&SEARCH=$searchUrl\&DOWNLOAD\&SHOWMAP">$search[$i]</a>
+THEEND
+            if ($i<$#search) { print " , "; }
+         }
+         print ")</small>\n";
+      }
+      print <<THEEND;
+<p>
+<small>(<a target="_parent" href="$command?SEARCH=$searchUrl\&DATE=$date\&SHOWHEATMAP">kaart met heatmap</a>)</small>
+THEEND
+   } elsif ($showHeatMap) {
+      if ($search =~ /,/) { print "Voor alle zoekwoorden zijn dezelfde kleuren gebruikt.\n"; }
+      # show map
+      print <<THEEND;
+<p>
+<!-- source: http://www.patrick-wied.at/static/heatmapjs/demo/maps_heatmap_layer/openlayers.php -->
+<div id="heatmapArea" style="width:480px;height:600px;margin:10px;"></div>
+<script src="http://openlayers.org/api/OpenLayers.js"></script>
+<script type="text/javascript" src="/heatmap.js"></script>
+<script type="text/javascript" src="/heatmap-openlayers.js"></script>
+<script type="text/javascript">
+var map, layer, heatmap;
+
+function init(){
+     var browserName=navigator.appName;
+     var patt=/Microsoft Internet Explorer/;
+     var result=patt.test(browserName);
+     if (result) { document.write("De heatmap werkt helaas niet met de webbrowser Microsoft Internet Explorer"); }
+ 
+     var testData={
+THEEND
+      print "data:[";
+      my $max = 0;
+      %seen = ();
+      if (open(INFILE,"$cache/$geoFile")) {
+         while (<INFILE>) {
+            my $line = $_;
+            chomp($line);
+            if ($line =~ /^#/) { next; }
+            my ($lat,$lon,$count) = split(/\s+/,$line);
+            $seen{"$lat $lon"} = defined $seen{"$lat $lon"} ?  $seen{"$lat $lon"}+$count : $count;
+         }
+         close(INFILE);
+         my $last = "[";
+         foreach my $key (keys %seen) {
+            if ($last ne "[") { print ","; }
+            my ($lat,$lon) = split(/\s+/,$key);
+            my $count = $seen{$key};
+            $last = "{lat:$lat, lon:$lon, count:$count}";
+            if ($max < $count) { $max = $count;}
+            print $last;
+         }
+      }
+      $max = int($max/3); # use more than one maximum
+      if ($max < 5) { $max = 5; } # use reasonable maximum score
+      if (defined $HEATMAPMAX and $HEATMAPMAX > 0) { $max = $HEATMAPMAX; }
+      print "], max:$max\n";
+      my $searchUrl = $search;
+      $searchUrl =~ s/\+/%2B/g;
+      $searchUrl =~ s/#/%23/g;
+      print <<THEEND;
+    };
+
+    var transformedTestData = { max: testData.max , data: [] },
+        data = testData.data,
+        datalen = data.length,
+        nudata = [];
+
+    // in order to use the OpenLayers Heatmap Layer we have to transform our data into 
+    // { max: <max>, data: [{lonlat: <OpenLayers.LonLat>, count: <count>},...]}
+
+    while(datalen--){
+        nudata.push({
+            lonlat: new OpenLayers.LonLat(data[datalen].lon, data[datalen].lat),
+            count: data[datalen].count
+        });
+    }
+
+    transformedTestData.data = nudata;
+
+   map = new OpenLayers.Map( 'heatmapArea');
+   layer = new OpenLayers.Layer.OSM();
+
+   // create our heatmap layer
+   heatmap = new OpenLayers.Layer.Heatmap( "Heatmap Layer", map, layer, {visible: true, radius:10}, {isBaseLayer: false, opacity: 0.3, legend: { title: 'test' }, projection: new OpenLayers.Projection("EPSG:4326")});
+   map.addLayers([layer, heatmap]);
+
+   var lonlat = new OpenLayers.LonLat( 5, 52 ); // from: http://stackoverflow.com/questions/9844677/javascript-openlayers-setcenter-not-working
+   lonlat.transform( new OpenLayers.Projection("EPSG:4326"), map.getProjectionObject() );
+   map.setCenter(lonlat,7);
+  
+   heatmap.setDataSet(transformedTestData);
+}
+
+window.onload = function(){ 
+    init(); 
+};
+
+document.getElementById("tog").onclick = function(){
+    heatmap.toggle();	
+};
+</script>
+<p>
+<small>
+(<a target="_parent" href="$url?DATE=$date\&SEARCH=$searchUrl\&DOWNLOAD\&SHOWMAP">download data van kaart</a>)
+&nbsp; &nbsp;
+(<a target="_parent" href="$command?SEARCH=$searchUrl\&DATE=$date\&SHOWMAP">kaart met positiemarkeringen</a>)
+</small>
+THEEND
+   }
+}
+
+# generate top of web page with web form
+sub showHead(){
+   my ($date1,$date2,$search) = @_;
+   my $text = "";
+   # print header of HTML file
+   if (not defined $myCookie or $myCookie eq "") { print $q->header(-charset=>'utf-8'); }
+   else { print $q->header(-cookie  => $myCookie, -charset=>'utf-8'); }
+   if (defined $date1 and defined $date2 and defined $search and $date1 ne "" and $date2 ne "" and $search ne "") {
+      $text = ": $search ($date1-$date2)";
+   }
+   print <<THEEND;
+<html>
+<head>
+<title>Zoek in tweets$text</title>
+<meta name="robots" content="noindex,nofollow">
+<style>
+ul.menu
+{
+   list-style-type:none;
+   margin:0;
+   padding:0;
+   overflow:hidden;
+}
+li.menu
+{
+   float:left;
+}
+a.menu:link,a.menu:visited
+{
+   display:block;
+   width:120px;
+   font-weight:bold;
+   color:#FFFFFF;
+   background-color:$menuBackground;
+   text-align:center;
+   padding:4px;
+   text-decoration:none;
+   text-transform:uppercase;
+   outline:none;
+}
+a.menu:hover,a.menu:active
+{
+   background-color:$menuHover;
+   outline:none;
+}
+a.tweet:link,a.tweet:visited,a.tweet:hover,a.tweet:active
+{
+   color:#000000;
+   text-decoration:none;
+   outline:none;
+}
+a.cloud:link,a.cloud:visited,a.cloud:hover,a.cloud:active
+{
+   color:$cloudForeground;
+   text-decoration:none;
+   outline:none;
+}
+/* page centering, source: http://webpageworkshop.co.uk/main/css_center_page */
+body {
+    margin: 50px 0px;
+    padding: 0px;
+    text-align: center;
+    background-color: #fcfcfc;
+}
+
+div.main {
+    width: 800px;
+    margin: 0px auto;
+    text-align: left;
+    padding: 15px;
+    background-color: #ffffff;
+}
+
+div.inside {
+    width: 780px;
+    margin: 0px auto;
+    text-align: left;
+    padding: 15px;
+    border: 1px solid #000000;
+    background-color: #ffffff;
+}
+
+/* source: http://www.dynamicdrive.com/style/csslibrary/item/css-popup-image-viewer/ */
+.thumbnail:hover{ visibility:hidden; }
+
+.thumbnail span{ /* CSS for enlarged image */
+background-color: white;
+position: absolute;
+visibility: hidden;
+}
+
+.thumbnail:hover span{ /* CSS for enlarged image on hover */
+visibility: visible;
+position: fixed;
+top: 0%;
+left:50%;
+margin-left: -515px; /* half of object width (1030) */
+margin-top: 100px;  /* half of object height (570) */
+height: 100%;
+}
+</style>
+</head>
+<body>
+<small><font color="red">$MESSAGE $motd</font></small>
+<small>Probeer ook eens de <a href="https://twinl.surfsara.nl">nieuwe snelle versie van twiqs.nl</a>. <a href="http://ifarm.nl/erikt/twinl/2016/07/11/new-and-faster-version-of-twiqs-nl/">Feedback</a> is van harte welkom!</small>
+THEEND
+
+print <<THEEND;
+<div class="main">
+<div align="right">
+<small>
+THEEND
+if (defined $user and $user ne "" and $user ne "guest") { 
+   print <<THEEND;
+<form action="$command-logout" method="post">
+<table width="100%" cellpadding="0" cellspacing="0"><tr>
+<td><a href="/cgi-bin/twitter" style="color:black; text-decoration:none; font-weight:bold">twiqs.nl</a></td>
+<td><a target="_parent" href="/faq/" style="align:left;">FAQ</a> &nbsp;</td>
+<td><a target="_parent" href="http://ifarm.nl/erikt/twinl/" style="align:left;">Blog</a> &nbsp;</td>
+<td><a target="_parent" href="ngrams/" style="align:left;">Ngrams</a> &nbsp;</td>
+THEEND
+   if ($loginStatus == $LOGINSUCCESS) {
+      print<<THEEND;
+<td align="right"><font color="green">(logincookie geplaatst)</font>&nbsp; &nbsp; </td>
+THEEND
+   }
+   print <<THEEND;
+<td align="right">Gebruiker: $user &nbsp;</td>
+<td width="80" align="right"><input name="LOGOUT" type="submit" value="Uitloggen"></td>
+</table>
+<input type="hidden" name="DATE" value="$date">
+<input type="hidden" name="SEARCH" value="$search">
+THEEND
+   if ($showHeatMap) { print "<input name=\"SHOWHEATMAP\" type=\"hidden\">\n"; }
+   if ($showMap) { print "<input name=\"SHOWMAP\" type=\"hidden\">\n"; }
+   if ($showCoverage) { print "<input name=\"SHOWCOVERAGE\" type=\"hidden\">\n"; }
+   if ($showCloud) { print "<input name=\"SHOWCLOUD\" type=\"hidden\">\n"; }
+   if ($showExperts) { print "<input name=\"SHOWUSERS\" type=\"hidden\">\n"; }
+   if ($showTweets) { print "<input name=\"SHOWTWEETS\" type=\"hidden\">\n"; }
+   if ($showOriginals) { print "<input name=\"SHOWORIGINALS\" type=\"hidden\">\n"; }
+   if ($showMetadata) { print "<input name=\"SHOWTWEETS\" type=\"hidden\">\n"; }
+   print "</form>\n</small>\n";
+} else { 
+   print <<THEEND;
+<form action="$command" method="post">
+<table width="100%" cellpadding="0" cellspacing="5"><tr>
+<td><a href="/cgi-bin/twitter" style="color:black; text-decoration:none; font-weight:bold">twiqs.nl</a></td>
+<td><a target="_parent" href="/faq/" style="align:left;">FAQ</a></td>
+<td><a target="_parent" href="http://ifarm.nl/erikt/twinl/" style="align:left;">Blog</a></td>
+<td><a target="_parent" href="/ngrams.html" style="align:left;">Ngrams</a></td>
+THEEND
+   if ($loginStatus == $LOGINFAILED) {
+      print<<THEEND;
+<td align="right"><small><font color="red">(Inloggen mislukt)</font></small>&nbsp; &nbsp; </td>
+THEEND
+   } else {
+      print <<THEEND;
+<td width="50">&nbsp</td>
+THEEND
+   }
+   print <<THEEND;
+<td align="right">Naam:</td><td> <input name="NAME" type="text" size="8"></td>
+<td align="right">Wachtwoord:</td><td> <input name="PASSWD" type="password" size="8"></td>
+<td align="right"><input type="submit" value="Inloggen"></td>
+<td align="right"> &nbsp; <a target="_parent" href="/register.html">Registreren</a></td>
+<input type="hidden" name="DATE" value="$date">
+<input type="hidden" name="SEARCH" value="$search">
+</table>
+THEEND
+   if ($showHeatMap) { print "<input name=\"SHOWHEATMAP\" type=\"hidden\">\n"; }
+   if ($showMap) { print "<input name=\"SHOWMAP\" type=\"hidden\">\n"; }
+   if ($showCoverage) { print "<input name=\"SHOWCOVERAGE\" type=\"hidden\">\n"; }
+   if ($showCloud) { print "<input name=\"SHOWCLOUD\" type=\"hidden\">\n"; }
+   if ($showExperts) { print "<input name=\"SHOWUSERS\" type=\"hidden\">\n"; }
+   if ($showTweets) { print "<input name=\"SHOWTWEETS\" type=\"hidden\">\n"; }
+   if ($showOriginals) { print "<input name=\"SHOWORIGINALS\" type=\"hidden\">\n"; }
+   if ($showMetadata) { print "<input name=\"SHOWTWEETS\" type=\"hidden\">\n"; }
+   print "</form>\n</small>\n";
+}
+print <<THEEND;
+</div>
+<div class="inside">
+<form action="$command" method="post">
+THEEND
+
+if ($showHeatMap) { print "<input name=\"SHOWHEATMAP\" type=\"hidden\">\n"; }
+if ($showMap) { print "<input name=\"SHOWMAP\" type=\"hidden\">\n"; }
+if ($showCoverage) { print "<input name=\"SHOWCOVERAGE\" type=\"hidden\">\n"; }
+if ($showCloud) { print "<input name=\"SHOWCLOUD\" type=\"hidden\">\n"; }
+if ($showExperts) { print "<input name=\"SHOWUSERS\" type=\"hidden\">\n"; }
+if ($showTweets) { print "<input name=\"SHOWTWEETS\" type=\"hidden\">\n"; }
+if ($showOriginals) { print "<input name=\"SHOWORIGINALS\" type=\"hidden\">\n"; }
+if ($showMetadata) { print "<input name=\"SHOWTWEETS\" type=\"hidden\">\n"; }
+if (defined $HEATMAPMAX and $HEATMAPMAX > 0) { print "<input name=\"HEATMAPMAX\" type=\"hidden\" value=\"$HEATMAPMAX\">\n"; }
+
+my ($day1p,$hour1p,$day2p,$month2p,$year2p,$hour2p) = ($day1,$hour1,$day2,$month2,$year2,$hour2);
+if ($hour1 eq "00" and $hour2 eq "23" and $day2 eq $day1 and $month2 eq $month1 and $year2 eq $year1) {
+   $hour1p = $hour2p = $day2p = $month2p = $year2p = "";
+} elsif ($hour1 eq $hour2 and $day2 eq $day1 and $month2 eq $month1 and $year2 eq $year1) {
+   $hour2p = $day2p = $month2p = $year2p = "";
+} elsif ($hour1 eq "00" and $hour2 eq "23" and $day1 eq "01" and $day2 eq &maxDays($year2,$month2) and $month2 eq $month1 and $year2 eq $year1) {
+   $day1p = $hour1p =$hour2p = $day2p = $month2p = $year2p = "";
+}
+print <<THEEND;
+<strong><font style="font-size: 24">Zoek in tweets:</font></strong> &nbsp;&nbsp;
+<input type="text" name="SEARCH" size="40" value="$search">
+<input type="submit" value="Zoeken">
+<input name="DATE1" value="$date1" type="hidden">
+<input name="DATE2" value="$date2" type="hidden">
+<br>
+<select name="DAY1">
+<option value=""></option>
+THEEND
+   for (my $i=1;$i<=31;$i++) { 
+      my $j  = $i =~ /../ ? $i : "0$i";
+      if ($j eq $day1p or ("$year1$month1$day1$year2$month2$day2" eq "" and $j eq $thisDay)) { print "<option value=\"$j\" selected>$i</option>\n"; }
+      else { print "<option value=\"$j\">$i</option>\n"; }
+   }
+   print <<THEEND;
+</select>
+<select name="MONTH1">
+<option value=""></option>
+THEEND
+   for (my $i=1;$i<=12;$i++) {
+      my $j  = $i =~ /../ ? $i : "0$i";
+      if ($j eq $month1 or ("$year1$month1$year2$month2" eq "" and $j eq $thisMonth)) { print "<option value=\"$j\" selected>".$months[$i-1]."</option>\n"; }
+      else { print "<option value=\"$j\">".$months[$i-1]."</option>\n"; }
+   }
+   print <<THEEND;
+</select>
+<select name="YEAR1">
+<option value=""></option>
+THEEND
+   for (my $i=2010;$i<=$thisYear;$i++) { 
+      if ($i eq $year1 or ("$year1$year2" eq "" and $i eq $thisYear)) { print "<option value=\"$i\" selected>$i</option>\n"; }
+      else { print "<option value=\"$i\">$i</option>\n"; }
+   }
+   print <<THEEND;
+</select>
+<select name="HOUR1">
+<option value=""></option>
+THEEND
+   for (my $i=0;$i<=23;$i++) {
+      my $j  = $i =~ /../ ? $i : "0$i";
+      if ($j eq $hour1p) { print "<option value=\"$j\" selected>$j</option>\n"; }
+      else { print "<option value=\"$j\">$j</option>\n"; }
+   }
+   print <<THEEND;
+</select>
+-
+<select name="DAY2">
+<option value=""></option>
+THEEND
+   for (my $i=1;$i<=31;$i++) { 
+      my $j  = $i =~ /../ ? $i : "0$i";
+      if ($j eq $day2p) { print "<option value=\"$j\" selected>$i</option>\n"; }
+      else { print "<option value=\"$j\">$i</option>\n"; }
+   }
+   print <<THEEND;
+</select>
+<select name="MONTH2">
+<option value=""></option>
+THEEND
+   for (my $i=1;$i<=12;$i++) { 
+      my $j  = $i =~ /../ ? $i : "0$i";
+      if ($j eq $month2p) { print "<option value=\"$j\" selected>".$months[$i-1]."</option>\n"; }
+      else { print "<option value=\"$j\">".$months[$i-1]."</option>\n"; }
+   }
+   print <<THEEND;
+</select>
+<select name="YEAR2">
+<option value=""></option>
+THEEND
+   for (my $i=2010;$i<=$thisYear;$i++) { 
+      if ($i eq $year2p) { print "<option value=\"$i\" selected>$i</option>\n"; }
+      else { print "<option value=\"$i\">$i</option>\n"; }
+   }
+   print <<THEEND;
+</select>
+<select name="HOUR2">
+<option value=""></option>
+THEEND
+   for (my $i=0;$i<=23;$i++) {
+      my $j  = $i =~ /../ ? $i : "0$i";
+      if ($j eq $hour2p) { print "<option value=\"$j\" selected>$j</option>\n"; }
+      else { print "<option value=\"$j\">$j</option>\n"; }
+   }
+   print <<THEEND;
+</select>
+</form>
+THEEND
+}
+
+# show tail of web page
+sub showTail() {
+   my $prettyDate = &prettyDate();
+   print <<THEEND;
+<p>
+<hr>
+<a target="_parent" href="https://www.surfsara.nl/"><img src="/images/surfsara.png" align="right" alt="SARA" width="80" height="30" border="0"></a>
+<a target="_parent" href="http://esciencecenter.nl/"><img src="/images/nlesc-logo.png" align="right" alt="Netherlands eScience Center" width="100" height="30" border="0"></a> 
+<address>
+Created at: $prettyDate.
+$MAIL
+(<a target="_parent" href="$statusUrl">clusterstatus</a>)
+</address>
+</div>
+</div>
+</body>
+</html>
+THEEND
+}
+
+sub showWaitingPage() {
+   my ($date,$search,$session) = @_;
+   my $text = "";
+   if (defined $date and defined $search and $date ne "" and $search ne "") {
+      $text = ": $search ($date)";
+   }
+   if (not defined $myCookie or $myCookie eq "") { print $q->header(-charset=>'utf-8'); }
+   else { print $q->header(-cookie  => $myCookie, -charset=>'utf-8'); }
+   my $searchUrl = $search;
+   $searchUrl =~ s/\+/%2B/g;
+   $searchUrl =~ s/#/%23/g;
+   # system("LANG=en_US.UTF-8 /usr/bin/curl '$statusUrl?SESSION=$session&SEARCH=$search&DATE=$date'");
+   print <<THEEND;
+<html>
+<head>
+<title>Zoeken in tweets$text</title>
+<meta http-equiv="refresh" content="5;url='$statusUrl?SESSION=$session&SEARCH=$searchUrl&DATE=$date'">
+</head>
+<body>
+Bezig met zoeken naar "$search" in $date, even geduld... (<a target="_parent" href="$url">home</a>)
+</body>
+</html>
+THEEND
+}
+
+sub prettyDate() {
+   my ($second,$minute,$hour,$day,$month,$year,$weekday) = localtime(time);
+   $year += 1900;
+   if ($hour !~ /../) { $hour = "0$hour"; }
+   if ($minute !~ /../) { $minute = "0$minute"; }
+   if ($second !~ /../) { $second = "0$second"; }
+   @months = qw(January February March April May June July August September October November December);
+   return("$day $months[$month] $year $hour:$minute:$second");
+}
+
+sub splitDate() {
+   my ($date) = @_;
+   my @d = split(//,$date);
+   my $year1 = defined $d[3] ? $d[0].$d[1].$d[2].$d[3] : "";
+   if ($year1 !~ /^\d{4}$/) { $year1 = ""; }
+   my $month1 = defined $d[5] ? $d[4].$d[5] : "";
+   if ($month1 !~ /^\d\d$/) { $month1 = ""; }
+   my $day1 = defined $d[7] ? $d[6].$d[7] : "";
+   if ($day1 !~ /^\d\d$/) { $day1 = ""; }
+   my $hour1 = defined $d[9] ? $d[8].$d[9] : "";
+   if ($hour1 !~ /^\d\d$/) { $hour1 = ""; }
+   my $year2 = defined $d[14] ? $d[11].$d[12].$d[13].$d[14] : "";
+   if ($year2 !~ /^\d{4}$/) { $year2 = ""; }
+   my $month2 = defined $d[16] ? $d[15].$d[16] : "";
+   if ($month2 !~ /^\d\d$/) { $month2 = ""; }
+   my $day2 = defined $d[18] ? $d[17].$d[18] : "";
+   if ($day2 !~ /^\d\d$/) { $day2 = ""; }
+   my $hour2 = defined $d[20] ? $d[19].$d[20] : "";
+   if ($hour2 !~ /^\d\d$/) { $hour2 = ""; }
+   return($year1,$month1,$day1,$hour1,$year2,$month2,$day2,$hour2);
+}
+
+sub splitLongDate() {
+   my $date = shift(@_);
+   my @d = split(//,$date);
+   my $year = defined $d[3] ? $d[0].$d[1].$d[2].$d[3] : "";
+   if ($year !~ /^\d{4}$/) { $year1 = ""; }
+   my $month = defined $d[5] ? $d[4].$d[5] : "";
+   if ($month !~ /^\d\d$/) { $month1 = ""; }
+   my $day = defined $d[7] ? $d[6].$d[7] : "";
+   if ($day !~ /^\d\d$/) { $day1 = ""; }
+   my $hour = defined $d[9] ? $d[8].$d[9] : "";
+   if ($hour !~ /^\d\d$/) { $hour1 = ""; }
+   my $minute = defined $d[11] ? $d[10].$d[11] : "";
+   if ($minute !~ /^\d\d$/) { $hour1 = ""; }
+   my $second = defined $d[13] ? $d[12].$d[13] : "";
+   if ($second !~ /^\d\d$/) { $hour1 = ""; }
+   return($year,$month,$day,$hour,$minute,$second);
+}
+
+sub localClient() {
+   return($userLevel eq "1" or
+          $ENV{"REMOTE_ADDR"} =~ /^145\.100\.61\./ or
+          $ENV{"REMOTE_ADDR"} eq "131.174.185.100" or
+          $ENV{"REMOTE_ADDR"} eq "131.174.30.4");
+}
+
+sub makePath() {
+   my ($date,$search) = @_;
+   my $path = "cache/$date/Search/$search";
+   return($path);
+}
+
+sub showTweets() {
+   my ($date,$search,$selectedHour,$selectedDay,$selectedMinute) = @_;
+   my ($year1,$month1,$day1,$hour1,$year2,$month2,$day2,$hour2) = &splitDate($date);
+   my $MAX = 30;
+   my $counter = 0;
+   my $path = &makePath($date,$search);
+   my %seen = ();
+   if ($download) { return(); } # should not happen
+   if (open(INFILE,"LANG=en_US.UTF-8 hadoop fs -cat \"$path/\"text* | /bin/gunzip -c |")) {
+      # collect relevant information from tweets
+      my %tweets = ();
+      my %replies = (); 
+      while (<INFILE>) {
+         my $line = $_;
+         chomp($line);
+         my @fields = split(/\t/,$line);
+         my $id_str = shift(@fields);
+         if (defined $seen{$id_str}) { next; }
+         $seen{$id_str} = 1;
+         my $user_id_str = shift(@fields);
+         my $date = shift(@fields);
+         my $time = shift(@fields);
+         my $in_reply_to_status_idstr = shift(@fields);
+         my $retweeted_status_id_str = shift(@fields);
+         my $screen_name = shift(@fields);
+         # for old format without columns in_reply_to_status_idstr + retweeted_status_id_str
+         if ($in_reply_to_status_idstr !~ /^(null|\d+)$/) {
+            unshift(@fields,$screen_name);
+            unshift(@fields,$retweeted_status_id_str);
+            $screen_name = $in_reply_to_status_idstr;
+            $in_reply_to_status_idstr = "null";
+            $retweeted_status_id_str = "null";
+         }
+         # for old format without column retweeted_status_id_str
+         if ($retweeted_status_id_str !~ /^(null|\d+)$/) {
+            unshift(@fields,$screen_name);
+            $screen_name = $retweeted_status_id_str;
+            $retweeted_status_id_str = "null";
+         }
+         if ($in_reply_to_status_idstr ne "null") {
+            $replies{$in_reply_to_status_idstr} = defined $replies{$in_reply_to_status_idstr} ?
+               $replies{$in_reply_to_status_idstr} . " $id_str" : $id_str;
+         }
+         my $text = shift(@fields);
+         my $m = $time;
+         $m =~ s/^...(..).*/$1/;
+         my $h = $time;
+         $h =~ s/^(..).*/$1/;
+         my $d = $date;
+         $d =~ s/.*(..)$/$1/;
+         if ($m < $selectedMinute) { next; }
+         if ($h < $selectedHour) { next; }
+         if ($d < $selectedDay) { next; }
+         my $twcolor = "0084B4";
+         $text =~ s/\b($search)\b/<strong>$1<\/strong>/gi;
+         $text =~ s/(#\w+)/<font color="#$twcolor">$1<\/font>/g;
+         $text =~ s/(\@\w+)/<font color="#$twcolor">$1<\/font>/g;
+         $text =~ s/(http:\/\/[^<> ]+)/<font color="#$twcolor">$1<\/font>/g;
+         # date format: Thu Oct 18 12:00:07 +0000 2012
+         if (&localClient()) {
+            $tweets{$id_str} = "<a class=\"tweet\" target=\"_parent\" href=\"http://twitter.com/$user_id_str/status/$id_str\">$date $time <strong>\@$screen_name</strong>:\t$text</a>";
+         } else {
+            $tweets{$id_str} = "<a class=\"tweet\" target=\"_parent\" href=\"http://twitter.com/$user_id_str/status/$id_str\"><strong>\@$user_id_str</strong>:\t$id_str</a>";
+         }
+         $counter++;
+         if ($search !~ /^@/ and $counter >= $MAX) { last; }
+      }
+      close(INFILE);
+      # show tweets
+      if (%tweets) {
+         if (&localClient()) {
+            print "<p>\n";
+            if ($date1 eq $date2) {
+               print "Kies een minuut: ";
+               for (my $i=0;$i<=59;$i++) {
+                  if ($i !~/../) { $i = "0$i"; }
+                  my $searchUrl = $search;
+                  $searchUrl =~ s/\+/%2B/g;
+                  $searchUrl =~ s/#/%23/g;
+                  if ($i eq $selectedMinute) { print "[$i]\n"; }
+                  else { print "<a target=\"_parent\" href=\"$url?SEARCH=$searchUrl\&DATE=$date\&SHOWTWEETS\&SELECTEDMINUTE=$i\">$i</a>\n"; }
+               }
+            } elsif ($date1 ne $date2 and $year1 eq $year2 and $month1 eq $month2 and $day1 eq $day2) {
+               print "Kies een uur: ";
+               for (my $i=$hour1;$i<=$hour2;$i++) {
+                  if ($i !~/../) { $i = "0$i"; }
+                  my $searchUrl = $search;
+                  $searchUrl =~ s/\+/%2B/g;
+                  $searchUrl =~ s/#/%23/g;
+                  if ($i eq $selectedHour) { print "[$i]\n"; }
+                  else { print "<a target=\"_parent\" href=\"$url?SEARCH=$searchUrl\&DATE=$date\&SHOWTWEETS\&SELECTEDHOUR=$i\">$i</a>\n"; }
+               }
+            } elsif ($date1 ne $date2 and $year1 eq $year2 and $month1 eq $month2 and $day1 ne $day2) {
+               print "Kies een dag: ";
+               for (my $i=$day1;$i<=$day2;$i++) {
+                  if ($i !~/../) { $i = "0$i"; }
+                  my $searchUrl = $search;
+                  $searchUrl =~ s/\+/%2B/g;
+                  $searchUrl =~ s/#/%23/g;
+                  if ($i eq $selectedDay) { print "[$i]\n"; }
+                  else { print "<a target=\"_parent\" href=\"$url?SEARCH=$searchUrl\&DATE=$date\&SHOWTWEETS\&SELECTEDDAY=$i\">$i</a>\n"; }
+               }
+            }  
+         }
+         print "<p>\n<small>\n";
+         my $first = 1;
+         my %seen = ();
+         my $counter = 0;
+         for my $key (sort keys %tweets) {
+            if (not defined $seen{$key}) {
+               if ($first) { $first = 0; print "    "; }
+               else { print "<br>"; }
+               print "$tweets{$key}\n";
+               $seen{$key} = 1;
+               if (&localClient() and defined $replies{$key}) {
+                  my @replies = split(/\s+/,$replies{$key});
+                  my @levels = ();
+                  for (my $i=0;$i<=$#replies;$i++) { push(@levels,"> "); }
+                  while (@replies) {
+                     print "<br>\n".$levels[0].$tweets{$replies[0]}."\n";
+                     $seen{$replies[0]} = 1;
+                     my @nextReplies = ();
+                     if (defined $replies{$replies[0]}) {
+                        @nextReplies = split(/\s+/,$replies{$replies[0]});
+                     }
+                     shift(@replies);
+                     my $nextLevel = $levels[0]."> ";
+                     shift(@levels);
+                     for (my $i=0;$i<=$#nextReplies;$i++) { unshift(@levels,$nextLevel); }
+                     push(@nextReplies,@replies);
+                     @replies = @nextReplies;
+                  }
+               }
+               $counter++;
+               if ($counter >= $MAX) { last; }
+            }
+         }
+         print "</small>\n";
+         my $searchUrl = $search;
+         $searchUrl =~ s/\+/%2B/g;
+         $searchUrl =~ s/#/%23/g;
+         if (not &localClient()) { 
+            print<<THEEND;
+<p>
+Klik op de getallen om de tweets te bekijken.
+<p>
+<small>
+(<a target="_parent" href="${url}?SEARCH=$searchUrl\&DATE=$date\&DOWNLOAD\&SHOWTWEETS">download ids</a>)
+</small>
+THEEND
+         } else {
+            print <<THEEND;
+<p>
+Klik op de tweets om ze op Twitter te bekijken.
+<p>
+<small>
+(download tweets: 
+<a target="_parent" href="${url}?SEARCH=$searchUrl\&DATE=$date\&DOWNLOAD\&SHOWTWEETS">kolomformaat</a>
+| 
+<a target="_parent" href="${url}?SEARCH=$searchUrl\&DATE=$date\&DOWNLOAD\&SHOWMETADATA">JSON</a>;
+download brontweets van retweets: 
+<a target="_parent" href="${url}?SEARCH=$searchUrl\&DATE=$date\&DOWNLOAD\&SHOWORIGINALS">kolomformaat</a>)
+</small>
+THEEND
+         }
+      } else { print "<p>\nGeen tweets beschikbaar.\n"; }
+   } else { print "<p>\nGeen tweets beschikbaar.\n"; }
+}
+
+sub showOriginals() {
+   my ($date,$search,$selectedHour,$selectedDay,$selectedMinute) = @_;
+   my ($year1,$month1,$day1,$hour1,$year2,$month2,$day2,$hour2) = &splitDate($date);
+   my $MAX = 30;
+   my $counter = 0;
+   my $path = &makePath($date,$search);
+   my %seen = ();
+   if (open(INFILE,"LANG=en_US.UTF-8 hadoop fs -cat \"$path/\"original* | /bin/gunzip -c |")) {
+      # collect relevant information from tweets
+      my %tweets = ();
+      my %replies = (); 
+      while (<INFILE>) {
+         my $line = $_;
+         chomp($line);
+         my @fields = split(/\t/,$line);
+         my $id_str = shift(@fields);
+         if (defined $seen{$id_str}) { next; }
+         $seen{$id_str} = 1;
+         my $user_id_str = shift(@fields);
+         my $date = shift(@fields);
+         my $time = shift(@fields);
+         my $in_reply_to_status_idstr = shift(@fields);
+         my $retweeted_status_id_str = shift(@fields);
+         my $screen_name = shift(@fields);
+         # for old format without columns in_reply_to_status_idstr + retweeted_status_id_str
+         if ($in_reply_to_status_idstr !~ /^(null|\d+)$/) {
+            unshift(@fields,$screen_name);
+            unshift(@fields,$retweeted_status_id_str);
+            $screen_name = $in_reply_to_status_idstr;
+            $in_reply_to_status_idstr = "null";
+            $retweeted_status_id_str = "null";
+         }
+         # for old format without column retweeted_status_id_str
+         if ($retweeted_status_id_str !~ /^(null|\d+)$/) {
+            unshift(@fields,$screen_name);
+            $screen_name = $retweeted_status_id_str;
+            $retweeted_status_id_str = "null";
+         }
+         if ($in_reply_to_status_idstr ne "null") {
+            $replies{$in_reply_to_status_idstr} = defined $replies{$in_reply_to_status_idstr} ?
+               $replies{$in_reply_to_status_idstr} . " $id_str" : $id_str;
+         }
+         my $text = shift(@fields);
+         my $m = $time;
+         $m =~ s/^...(..).*/$1/;
+         my $h = $time;
+         $h =~ s/^(..).*/$1/;
+         my $d = $date;
+         $d =~ s/.*(..)$/$1/;
+         if ($m < $selectedMinute) { next; }
+         if ($h < $selectedHour) { next; }
+         if ($d < $selectedDay) { next; }
+         my $twcolor = "0084B4";
+         $text =~ s/\b($search)\b/<strong>$1<\/strong>/gi;
+         $text =~ s/(#\w+)/<font color="#$twcolor">$1<\/font>/g;
+         $text =~ s/(\@\w+)/<font color="#$twcolor">$1<\/font>/g;
+         $text =~ s/(http:\/\/[^<> ]+)/<font color="#$twcolor">$1<\/font>/g;
+         # date format: Thu Oct 18 12:00:07 +0000 2012
+         if (&localClient()) {
+            $tweets{$id_str} = "<a class=\"tweet\" target=\"_parent\" href=\"http://twitter.com/$user_id_str/status/$id_str\">$date $time <strong>\@$screen_name</strong>:\t$text</a>";
+         } else {
+            $tweets{$id_str} = "<a class=\"tweet\" target=\"_parent\" href=\"http://twitter.com/$user_id_str/status/$id_str\"><strong>\@$user_id_str</strong>:\t$id_str</a>";
+         }
+         $counter++;
+         if ($search !~ /^@/ and $counter >= $MAX) { last; }
+      }
+      close(INFILE);
+      # show tweets
+      if (%tweets) {
+         if (&localClient()) {
+            print "<p>\n";
+            if ($date1 eq $date2) {
+               print "Kies een minuut: ";
+               for (my $i=0;$i<=59;$i++) {
+                  if ($i !~/../) { $i = "0$i"; }
+                  my $searchUrl = $search;
+                  $searchUrl =~ s/\+/%2B/g;
+                  $searchUrl =~ s/#/%23/g;
+                  if ($i eq $selectedMinute) { print "[$i]\n"; }
+                  else { print "<a target=\"_parent\" href=\"$url?SEARCH=$searchUrl\&DATE=$date\&SHOWORIGINALS\&SELECTEDMINUTE=$i\">$i</a>\n"; }
+               }
+            } elsif ($date1 ne $date2 and $year1 eq $year2 and $month1 eq $month2 and $day1 eq $day2) {
+               print "Kies een uur: ";
+               for (my $i=$hour1;$i<=$hour2;$i++) {
+                  if ($i !~/../) { $i = "0$i"; }
+                  my $searchUrl = $search;
+                  $searchUrl =~ s/\+/%2B/g;
+                  $searchUrl =~ s/#/%23/g;
+                  if ($i eq $selectedHour) { print "[$i]\n"; }
+                  else { print "<a target=\"_parent\" href=\"$url?SEARCH=$searchUrl\&DATE=$date\&SHOWORIGINALS\&SELECTEDHOUR=$i\">$i</a>\n"; }
+               }
+            } elsif ($date1 ne $date2 and $year1 eq $year2 and $month1 eq $month2 and $day1 ne $day2) {
+               print "Kies een dag: ";
+               for (my $i=$day1;$i<=$day2;$i++) {
+                  if ($i !~/../) { $i = "0$i"; }
+                  my $searchUrl = $search;
+                  $searchUrl =~ s/\+/%2B/g;
+                  $searchUrl =~ s/#/%23/g;
+                  if ($i eq $selectedDay) { print "[$i]\n"; }
+                  else { print "<a target=\"_parent\" href=\"$url?SEARCH=$searchUrl\&DATE=$date\&SHOWORIGINALS\&SELECTEDDAY=$i\">$i</a>\n"; }
+               }
+            }  
+         }
+         print "<p>\n<small>\n";
+         my $first = 1;
+         my %seen = ();
+         my $counter = 0;
+         for my $key (sort keys %tweets) {
+            if (not defined $seen{$key}) {
+               if ($first) { $first = 0; print "    "; }
+               else { print "<br>"; }
+               print "$tweets{$key}\n";
+               $seen{$key} = 1;
+               if (&localClient() and defined $replies{$key}) {
+                  my @replies = split(/\s+/,$replies{$key});
+                  my @levels = ();
+                  for (my $i=0;$i<=$#replies;$i++) { push(@levels,"> "); }
+                  while (@replies) {
+                     print "<br>\n".$levels[0].$tweets{$replies[0]}."\n";
+                     $seen{$replies[0]} = 1;
+                     my @nextReplies = ();
+                     if (defined $replies{$replies[0]}) {
+                        @nextReplies = split(/\s+/,$replies{$replies[0]});
+                     }
+                     shift(@replies);
+                     my $nextLevel = $levels[0]."> ";
+                     shift(@levels);
+                     for (my $i=0;$i<=$#nextReplies;$i++) { unshift(@levels,$nextLevel); }
+                     push(@nextReplies,@replies);
+                     @replies = @nextReplies;
+                  }
+               }
+               $counter++;
+               if ($counter >= $MAX) { last; }
+            }
+         }
+         print "</small>\n";
+         my $searchUrl = $search;
+         $searchUrl =~ s/\+/%2B/g;
+         $searchUrl =~ s/#/%23/g;
+         if (not &localClient()) { 
+            print<<THEEND;
+<p>
+Klik op de getallen om de tweets te bekijken.
+<p>
+<small>
+(<a target="_parent" href="${url}?SEARCH=$searchUrl\&DATE=$date\&DOWNLOAD\&SHOWORIGINALS">download ids</a>)
+</small>
+THEEND
+         } else {
+            print <<THEEND;
+<p>
+Klik op de tweets om ze op Twitter te bekijken.
+<p>
+<small>
+(download tweets: 
+<a target="_parent" href="${url}?SEARCH=$searchUrl\&DATE=$date\&DOWNLOAD\&SHOWTWEETS">kolomformaat</a>
+| 
+<a target="_parent" href="${url}?SEARCH=$searchUrl\&DATE=$date\&DOWNLOAD\&SHOWMETADATA">JSON</a>;
+download brontweets van retweets: 
+<a target="_parent" href="${url}?SEARCH=$searchUrl\&DATE=$date\&DOWNLOAD\&SHOWORIGINALS">kolomformaat</a>)
+</small>
+THEEND
+         }
+      } else { print "<p>\nGeen tweets beschikbaar.\n"; }
+   } else { print "<p>\nGeen tweets beschikbaar.\n"; }
+}
+
+sub doReset() {
+   my ($date,$search) = @_;
+   # allow only 
+   if ($date !~ /^$today/ and not &localClient()) {
+      # print header of HTML file
+      if (not defined $myCookie or $myCookie eq "") { print $q->header(-charset=>'utf-8'); }
+      else { print $q->header(-cookie  => $myCookie, -charset=>'utf-8'); }
+      print <<THEEND;
+De resultaten van deze zoekopdracht kunnen niet door u worden ververst.
+Neem contact op met beheerder via onderstaand e-mailadres.
+THEEND
+      return();
+   }
+   my ($year,$month,$day,$hour) = &splitDate($date);
+   if ($year =~ /^\d\d\d\d$/ and $month =~ /^\d\d$/ and defined $search and $search ne "") {
+      my $path = &makePath($date,$search);
+      system("LANG=en_US.UTF-8 hadoop fs -rm -r \"$path\" >/dev/null");
+      system("/bin/rm -f /var/www/cache/*.$date.$search.*");
+      &logLine("reset",$user,$date,$search);
+      &searcher($date,$search);
+   }
+}
+
+sub getTime() {
+   # date format: Thu Oct 18 12:00:07 +0000 2012
+   my $date = shift(@_);
+   ($_,my $month,my $day,my $hour,my $minute,my $second,$_,my $year) = split(/\s|:/,$date);
+   %months = qw(Jan 01 Feb 02 Mar 03 Apr 04 May 05 Jun 06 Jul 07 Aug 08 Sep 09 Oct 10 Nov 11 Dec 12);
+   @days = (0,31,28,31,30,31,30,31,31,30,31,30,31);
+   if ($year/4 == 4*(int($year/4))) { $days[1]++; } # February in leap year
+   # summer time 
+   my %starts = qw(2011 27 2012 25 2013 31 2014 30 2015 29);
+   my %ends = qw(2011 30 2012 28 2013 27 2014 26 2015 25);
+   my $start = defined $starts{$year} ? $starts{$year} : 25;
+   my $end = defined $ends{$year} ? $ends{$year} : 25;
+   # check if it is summertime
+   my $summertime = 1;
+   if ($month eq "Jan" or $month eq "Feb") { $summertime = 0; }
+   if ($month eq "Mar" and $day < $start) { $summertime = 0; }
+   if ($month eq "Mar" and $day == $start and $hour == 0) { $summertime = 0; }
+   if ($month eq "Dec" or $month eq "Nov") { $summertime = 0; }
+   if ($month eq "Oct" and $day > $end) { $summertime = 0; }
+   if ($month eq "Oct" and $day == $end and $hour > 0) { $summertime = 0; }
+   $hour++;
+   if ($summertime) { $hour++; }
+   $month = $months{$month};
+   if ($hour >= 24) { 
+      $hour -= 24; 
+      $day++;
+      if ($day > $days[$month]) {
+         $day = "01";
+         $month++;
+         if ($month > 12) { $month = "01"; }
+      }
+   }
+   while ($hour !~ /../) { $hour = "0$hour"; } 
+   if ($day !~ /../) { $day = "0$day"; }
+   return("$hour:$minute:$second","$year-$month-$day");
+}
+
+# count tweets in OR query result while ignoring doubles
+sub countTweets() {
+   my ($date,$search) = @_;
+   my $path = &makePath($date,$search);
+   my %seen = ();
+   my $counter = 0;
+   my $counterFile = "tweetCount.$date.$search";
+ 
+   # check counter file
+   if (open(INFILE,"$cache/$counterFile")) {
+      while (<INFILE>) {
+         my $line = $_;
+         chomp($line);
+         if ($line =~ /^\d+$/) { $counter = $line; }
+         last;
+      }
+      close(INFILE);
+      if ($counter > 0) { return($counter); }
+   }
+   # no data found in counter file: count the tweets
+   if (open(INFILE,"LANG=en_US.UTF-8 hadoop fs -cat \"$path\"/text* | /bin/gunzip -c |")) {
+      while (<INFILE>) {
+         my $line = $_;
+         chomp($line);
+         my @fields = split(/\s/,$line);
+         my $id_str = shift(@fields);
+         if (defined $seen{$id_str}) { next; }
+         $seen{$id_str} = 1;
+         $counter++;
+      }
+      close(INFILE);
+   }
+   # store count in file
+   if (open(OUTFILE,">$cache/$counterFile")) {
+      print OUTFILE "$counter\n";
+      close(OUTFILE);
+   }
+   return($counter);
+}
+
+sub download() {
+   if (not defined $cookie or $cookie eq "") { 
+      print $q->header(-type=>'text/csv', -charset=>'utf-8');
+   } else { 
+      print $q->header(-type=>'text/csv', -charset=>'utf-8', -cookie  => $myCookie); 
+   }
+   my ($date,$search) = @_;
+   my ($year,$month,$day,$hour) = &splitDate($date);
+   my $path = &makePath($date,$search);
+   if ($showTweets) { # download tweets
+      %seen = ();
+      if (open(INFILE,"LANG=en_US.UTF-8 hadoop fs -cat \"$path\"/text* | /bin/gunzip -c |")) {
+         print "#user_id\t#tweet_id";
+         if (&localClient()) { print "\t#date\t#time\t#reply_to_tweet_id\t#retweet_to_tweet_id\t#user_name\t#tweet"; }
+         print "\t#DATE=$date\t#SEARCHTOKEN=$search\n";
+         # collect relevant information from tweets
+         while (<INFILE>) {
+            my $line = $_;
+            chomp($line);
+            my @fields = split(/\t/,$line);
+            my $id_str = shift(@fields);
+            if (defined $seen{$id_str}) { next; }
+            $seen{$id_str} = 1;
+            my $user_id_str = shift(@fields);
+            print "$user_id_str\t$id_str";
+            if (&localClient()) {
+               my $date = shift(@fields);
+               my $time = shift(@fields);
+               my $in_reply_to_status_idstr = shift(@fields);
+               my $retweeted_status_id_str = shift(@fields);
+               my $screen_name = shift(@fields);
+               # for old format without columns in_reply_to_status_idstr + retweeted_status_id_str
+               if ($in_reply_to_status_idstr !~ /^(null|\d+)$/) {
+                  unshift(@fields,$screen_name);
+                  unshift(@fields,$retweeted_status_id_str);
+                  $screen_name = $in_reply_to_status_idstr;
+                  $in_reply_to_status_idstr = "null";
+                  $retweeted_status_id_str = "null";
+               }
+               # for old format without column retweeted_status_id_str
+               if ($retweeted_status_id_str !~ /^(null|\d+)$/) {
+                  unshift(@fields,$screen_name);
+                  $screen_name = $retweeted_status_id_str;
+                  $retweeted_status_id_str = "null";
+               }
+               my $text = join("\t",@fields); # may contain other fields following the tweet text
+               print "\t$date\t$time\t$in_reply_to_status_idstr\t$retweeted_status_id_str\t$screen_name\t$text"; 
+            }
+            print "\n";
+         }
+         close(INFILE);
+      }
+   } elsif ($showOriginals) { # download source tweets of retweets
+      if (open(INFILE,"LANG=en_US.UTF-8 hadoop fs -cat \"$path\"/original* | /bin/gunzip -c |")) {
+         print "#user_id\t#tweet_id";
+         if (&localClient()) { print "\t#date\t#time\t#reply_to_tweet_id\t#retweet_to_tweet_id\t#user_name\t#tweet"; }
+         print "\t#DATE=$date\t#SEARCHTOKEN=$search\n";
+         # collect relevant information from tweets
+         while (<INFILE>) {
+            my $line = $_;
+            chomp($line);
+            my @fields = split(/\t/,$line);
+            my $id_str = shift(@fields);
+            my $user_id_str = shift(@fields);
+            my $date = shift(@fields);
+            my $time = shift(@fields);
+            my $in_reply_to_status_idstr = shift(@fields);
+            my $retweeted_status_id_str = shift(@fields);
+            my $screen_name = shift(@fields);
+            # for old format without columns in_reply_to_status_idstr + retweeted_status_id_str
+            if ($in_reply_to_status_idstr !~ /^(null|\d+)$/) {
+               unshift(@fields,$screen_name);
+               unshift(@fields,$retweeted_status_id_str);
+               $screen_name = $in_reply_to_status_idstr;
+               $in_reply_to_status_idstr = "null";
+               $retweeted_status_id_str = "null";
+            }
+            # for old format without column retweeted_status_id_str
+            if ($retweeted_status_id_str !~ /^(null|\d+)$/) {
+               unshift(@fields,$screen_name);
+               $screen_name = $retweeted_status_id_str;
+               $retweeted_status_id_str = "null";
+            }
+            my $text = join("\t",@fields); # may contain other fields following the tweet text
+            print "$user_id_str\t$id_str";
+            if (&localClient()) { print "\t$date\t$time\t$in_reply_to_status_idstr\t$retweeted_status_id_str\t$screen_name\t$text"; }
+            print "\n";
+         }
+         close(INFILE);
+      }
+   } elsif ($showMetadata and &localClient()) { # download tweets+meta data
+      if (open(INFILE,"LANG=en_US.UTF-8 hadoop fs -cat \"$path\"/tweet* | /bin/gunzip -c |")) {
+         # collect relevant information from tweets
+         while (<INFILE>) {
+            my $line = $_;
+            chomp($line);
+            print "$line\n";
+         }
+         close(INFILE);
+      }
+   } elsif ($showGraph) {
+      if (open(INFILE,"$cache/$dataFile.0")) {
+         print "#date\t#time\t#fractionMatched\t#countNonMatched\t#countMatched\t#DATE=$date\t#SEARCHTOKEN=$search\n";
+         while (<INFILE>) {
+            $line = $_;
+            chomp($line);
+            if ($line =~/^\s*#/) { next; }
+            my @fields = split(/\t/,$line);
+            my $tweetDate = shift(@fields);
+            $line = join("\t",@fields);
+            my ($year,$month,$day,$hour,$minute,$second) = &splitLongDate($tweetDate);
+            print "$year-$month-$day\t$hour:$minute\t$line\n"; # 20131218 don't use second: it's empty 
+         }
+         close(INFILE);
+      } else { print STDERR "cannot open data file $cache/$dataFile.0!\n"; }
+   } elsif ($showMap) {
+      if (open(INFILE,"$cache/$geoFile")) {
+         while (<INFILE>) { print; }
+         close(INFILE);
+      } else { print STDERR "cannot open geo file $cache/$geoFile!\n"; }
+   } elsif ($showCloud) {
+      if (open(INFILE,"$cache/$cloudAllFile")) {
+         while (<INFILE>) { print; }
+         close(INFILE);
+      } else { print STDERR "cannot open cloud file $cache/$geoFile!\n"; }
+   } elsif ($showExperts) {
+      if (open(INFILE,"$cache/$expertsAllFile")) {
+         while (<INFILE>) { print; }
+         close(INFILE);
+      } else { print STDERR "cannot open experts file $cache/$geoFile!\n"; }
+   } elsif ($showHash) {
+      if (open(INFILE,"$cache/$hashFile")) {
+         while (<INFILE>) { print; }
+         close(INFILE);
+      } else { print STDERR "cannot open cloud file $cache/$geoFile!\n"; }
+   } else { print "cannot download: unknown resource!\n"; }
+}
+
+sub logLine() {
+   my @fields = @_;
+   my $client = $ENV{"REMOTE_ADDR"};
+   my ($second,$minute,$hour,$day,$month,$year) = localtime(time);
+   $year += 1900;
+   $month++;
+   if ($month !~ /../) { $month = "0$month"; }
+   if ($day !~ /../) { $day = "0$day"; }
+   if ($hour !~ /../) { $hour = "0$hour"; }
+   if ($minute !~ /../) { $minute = "0$minute"; }
+   if ($second !~ /../) { $second = "0$second"; }
+   my $today = "$year-$month-$day $hour:$minute:$second";
+   if (open(LOGFILE,">>$logFile")) {
+      print LOGFILE "$today $client @fields\n";
+      close(LOGFILE);
+   }
+   if (defined $user and $user ne "" and $user ne "guest" and open(LOGFILE,">>$userDir/$user")) {
+      print LOGFILE "$today $client @fields\n";
+      close(LOGFILE);
+   }
+}  
+
+sub errlog() {
+   my @fields = @_;
+   my $client = $ENV{"REMOTE_ADDR"};
+   my ($second,$minute,$hour,$day,$month,$year) = localtime(time);
+   $year += 1900;
+   $month++;
+   if ($month !~ /../) { $month = "0$month"; }
+   if ($day !~ /../) { $day = "0$day"; }
+   if ($hour !~ /../) { $hour = "0$hour"; }
+   if ($minute !~ /../) { $minute = "0$minute"; }
+   if ($second !~ /../) { $second = "0$second"; }
+   my $today = "$year-$month-$day $hour:$minute:$second";
+   if (open(ERRFILE,">>$errFile")) {
+      print ERRFILE "$today $client @fields\n";
+      close(ERRFILE);
+   }
+}  
+
+sub prettyNumber() {
+   my $nbr = shift(@_);
+   my @digits = split(//,$nbr);
+   my $outString = "";
+   for (my $i=$#digits;$i>=0;$i--) {
+      $outString = $digits[$i].$outString;
+      if ($i != 0 and $i != $#digits and
+          3*int(($#digits+1-$i)/3) == ($#digits+1-$i)) { 
+         $outString = ".".$outString;
+      }
+   }
+   return($outString);
+}
+
+# convert input dates to standard values
+sub processDates() {
+   my ($year1,$month1,$day1,$hour1,$year2,$month2,$day2,$hour2) = @_;
+
+   # swap first and second date if first is empty while second is not
+   if ("$year1$month1$day1$hour1" eq "" and "$year2$month2$day2$hour2" ne "") {
+       $year1 = $year2; $year2 = "";
+       $month1 = $month2; $month2 = "";
+       $day1 = $day2; $day2 = "";
+       $hour1 = $hour2; $hour2 = "";
+   }
+   my $date1 = "";
+   my $date2 = "";
+   # use current date if there are no valid dates
+   if ("$year1$month1$day1$hour1" eq "" and "$year2$month2$day2$hour2" eq "") {
+      $date1 = $today."00";
+      $date2 = $today."23";
+      return($date1,$date2);
+   }
+   # only year specified
+   if ("$month1$day1$hour1" eq "" and "$month2$day2$hour2" eq "") {
+      if ($year1 eq "") { $year1 = $year2; }
+      if ($year2 eq "") { $year2 = $year1; }
+      if ($year2 lt $year1) { ($year1,$year2) = ($year2,$year1); }
+      $date1 = $year1."010100";
+      $date2 = $year2."123123";
+      return($date1,$date2);
+   }
+   # only year and/or month specified
+   if ("$day1$hour1" eq "" and "$day2$hour2" eq "") {
+      if ($year1 ne "" and $year2 ne "" and $year2 lt $year1) { ($year1,$year2) = ($year2,$year1); ($month1,$month2) = ($month2,$month1); }
+      if ($month1 eq "") { $month1 = $year1 ne "" ? "01" : $month2; }
+      if ($month2 eq "") { $month2 = $year2 ne "" ? "12" : $month1; }
+      if ($year1 eq "") { $year1 = $year2 ne "" ? $year2 : $thisYear; }
+      if ($year2 eq "") { $year2 = $year1 ne "" ? $year1 : $thisYear; }
+      if ("$year2$month2" lt "$year1$month1") { ($year1,$year2) = ($year2,$year1); ($month1,$month2) = ($month2,$month1); }
+      $day2 = &maxDays($year2,$month2);
+      $date1 = "$year1$month1"."0100";
+      $date2 = "$year2$month2$day2"."23";
+      return($date1,$date2);
+   }
+   # only year and/or month and/or day specified
+   if ("$hour1" eq "" and "$hour2" eq "") {
+      if ($year1 ne "" and $year2 ne "" and $year2 lt $year1) { ($year1,$year2) = ($year2,$year1); ($month1,$month2) = ($month2,$month1); ($day1,$day2) = ($day2,$day1); }
+      if ($year1 ne "" and $month1 ne "" and $year2 ne "" and $month2 ne "" and "$year2$month2" lt "$year1$month1") { ($year1,$year2) = ($year2,$year1); ($month1,$month2) = ($month2,$month1); ($day1,$day2) = ($day2,$day1); }
+      if ($day1 eq "") { $day1 = "$year1$month1" ne "" ? "01" : $day2; }
+      if ($day2 eq "") { $day2 = "$year2$month2" ne "" ? "" : $day1; }
+      if ($month1 eq "") { $month1 = $year1 ne "" ? "01" : ($month2 ne "" ? $month2 : $thisMonth); }
+      if ($month2 eq "") { $month2 = $year2 ne "" ? "12" : ($month1 ne "" ? $month1 : $thisMonth); }
+      if ($year1 eq "") { $year1 = $year2 ne "" ? $year2 : $thisYear; }
+      if ($year2 eq "") { $year2 = $year1 ne "" ? $year1 : $thisYear; }
+      if ($day2 eq "") { $day2 = &maxDays($year2,$month2); }
+      if ("$year2$month2$day2" lt "$year1$month1$day1") { ($year1,$year2) = ($year2,$year1); ($month1,$month2) = ($month2,$month1); ($day1,$day2) = ($day2,$day1); }
+      $date1 = "$year1$month1$day1"."00";
+      $date2 = "$year2$month2$day2"."23";
+      return($date1,$date2);
+   }
+   # year and/or month and/or day and/or hour specified
+      if ($year1 ne "" and $year2 ne "" and $year2 lt $year1) { ($year1,$year2) = ($year2,$year1); ($month1,$month2) = ($month2,$month1); ($day1,$day2) = ($day2,$day1); ($hour1,$hour2) = ($hour2,$hour1); }
+      if ($year1 ne "" and $month1 ne "" and $year2 ne "" and $month2 ne "" and "$year2$month2" lt "$year1$month1") { ($year1,$year2) = ($year2,$year1); ($month1,$month2) = ($month2,$month1); ($day1,$day2) = ($day2,$day1); ($hour1,$hour2) = ($hour2,$hour1); }
+      if ($year1 ne "" and $month1 ne "" and $day1 ne "" and $year2 ne "" and $month2 ne "" and $day2 ne "" and "$year2$month2$day2" lt "$year1$month1$day1") { ($year1,$year2) = ($year2,$year1); ($month1,$month2) = ($month2,$month1); ($day1,$day2) = ($day2,$day1); ($hour1,$hour2) = ($hour2,$hour1); }
+      if ($hour1 eq "") { $hour1 = "$year1$month1$day1" ne "" ? "00" : $hour2; }
+      if ($hour2 eq "") { $hour2 = "$year2$month2$day2" ne "" ? "23" : $hour1; }
+      if ($day1 eq "") { $day1 = "$year1$month1" ne "" ? "01" : $day2; }
+      if ($day2 eq "") { $day2 = "$year2$month2" ne "" ? "" : $day1; }
+      if ($month1 eq "") { $month1 = $year1 ne "" ? "01" : ($month2 ne "" ? $month2 : $thisMonth); }
+      if ($month2 eq "") { $month2 = $year2 ne "" ? "12" : ($month1 ne "" ? $month1 : $thisMonth); }
+      if ($year1 eq "") { $year1 = $year2 ne "" ? $year2 : $thisYear; }
+      if ($year2 eq "") { $year2 = $year1 ne "" ? $year1 : $thisYear; }
+      if ($day2 eq "") { $day2 = &maxDays($year2,$month2); }
+      if ("$year2$month2$day2$hour2" lt "$year1$month1$day1$hour1") { ($year1,$year2) = ($year2,$year1); ($month1,$month2) = ($month2,$month1); ($day1,$day2) = ($day2,$day1); ($hour1,$hour2) = ($hour2,$hour1); }
+      $date1 = "$year1$month1$day1$hour1";
+      $date2 = "$year2$month2$day2$hour2";
+      return($date1,$date2);
+}
+
+sub maxDays() {
+   my ($year,$month) = @_;
+
+   if (not defined $year or not defined $month or $year eq "" or $month eq "") { return(""); }
+   if ($month == 4 or $month == 6 or $month == 9 or $month == 11) { return(30); }
+   elsif ($month == 2) {
+      if ($year % 4 != 0 or ($year % 100 == 0 and $year % 400 != 0)) { return(28); }
+      else { return(29); }
+   } else { return(31); }
+}
+
+sub makeCloud() {
+   my ($date,$search) = @_;
+   my ($year1,$month1,$day1) = &splitDate($date);
+   my $path = &makePath($date,$search);
+   my $MAXTOKENS = 50;
+   my $min;
+   my @search = split(/\s|,|@|_|-|\.|\+/,$search);
+   my %search = ();
+   for (my $i=0;$i<=$#search;$i++) { 
+      $search[$i] =~ s/^@//;
+      $search{lc($search[$i])} = 1; 
+   }
+   my ($yesterdayY,$yesterdayM,$yesterdayD) = &yesterday($year1,$month1,$day1);
+   my $path2 = "$yesterdayY/$yesterdayM/$yesterdayD/Tokenizer/CountWords";
+   if ($search eq "twinl-sent-pos") { $path2 = "$date/Search/twinl-sent-neg/CountWords"; }
+   if ($search eq "twinl-sent-neg") { $path2 = "$date/Search/twinl-sent-pos/CountWords"; }
+   if ($search =~ /^twinl-sent-pos\+(.*)$/) { $path2 = "$date/Search/twinl-sent-neg+$1/CountWords"; }
+   if ($search =~ /^twinl-sent-neg\+(.*)$/) { $path2 = "$date/Search/twinl-sent-pos+$1/CountWords"; }
+   if ($search eq "twinl-gender-f") { $path2 = "$date/Search/twinl-gender-m/CountWords"; }
+   if ($search eq "twinl-gender-m") { $path2 = "$date/Search/twinl-gender-f/CountWords"; }
+   if ($search eq "twinl-age-17") { $path2 = "$date/Search/twinl-age-21,twinl-age-26/CountWords"; }
+   if ($search eq "twinl-age-21") { $path2 = "$date/Search/twinl-age-17,twinl-age-26/CountWords"; }
+   if ($search eq "twinl-age-26") { $path2 = "$date/Search/twinl-age-17,twinl-age-21/CountWords"; }
+
+   # tokenize this day, in case this has not been done yet
+   my $path2Short = $path2;
+   $path2Short =~ s/\/CountWords$//;
+   if ($path2Short =~ /twinl-/) { $path2Short =~ s/^/cache\//; }
+   else { $path2Short =~ s/^/twitter\//; }
+   if (! system("LANG=en_US.UTF-8 hadoop fs -test -e \"$path2Short/_SUCCESS\" 2>/dev/null") == 0) {
+      if (system("LANG=en_US.UTF-8 hadoop fs -test -d \"$path2Short\" 2>/dev/null") == 0) {
+         my $counter = 0;
+         while ($counter < 720/$sleep and ! system("LANG=en_US.UTF-8 hadoop fs -test -e \"$path2Short/_SUCCESS\" 2>/dev/null") == 0) { sleep($sleep); $counter++; }
+         if (! system("LANG=en_US.UTF-8 hadoop fs -test -e \"$path2Short/_SUCCESS\" 2>/dev/null") == 0) {
+            # system is stuck: delete directory and rerun
+            system("LANG=en_US.UTF-8 hadoop fs -rm -r \"$path2Short\" 2>/dev/null");
+            $path2Short =~ s/\/Tokenizer$//;
+            $session = int(1+rand(32768)).".".$$;
+            chdir("/home/cloud/java/tokenizer");
+            &logLine("hadoop $session ".time()." $user tokenizer $date1-$date2 $search");
+            if ($date1 eq $date2 and $search ne $everything and $_ = fork) { &raisePriority($session); exit(0); }
+            if (open(INFILE,"LANG=en_US.UTF-8 hadoop jar Tokenizer.jar nl.sara.hadoop.Tokenizer -libjars json-simple-1.1.1.jar,Tokenizer.jar \"$path2Short\" 2>/tmp/$session.err >/dev/null |")) {
+               close(INFILE);
+               unlink("/tmp/$session.err");
+            } else { print STDERR "run error for Tokenizer!\n"; exit(1); }
+            $path2Short =~ s/$/\/Tokenizer/;
+         }
+      } elsif ($path2Short =~ /\/Tokenizer$/) { # otherwise: give up
+         # hadoop cache does not exist
+         $path2Short =~ s/\/Tokenizer$//;
+         $session = int(1+rand(32768)).".".$$;
+         chdir("/home/cloud/java/tokenizer");
+         &logLine("hadoop $session ".time()." $user tokenizer $date1-$date2 $search");
+         if ($date1 eq $date2 and $search ne $everything and $_ = fork) { &raisePriority($session); exit(0); }
+         if (open(INFILE,"LANG=en_US.UTF-8 hadoop jar Tokenizer.jar nl.sara.hadoop.Tokenizer -libjars json-simple-1.1.1.jar,Tokenizer.jar \"$path2Short\" 2>/tmp/$session.err >/dev/null |")) {
+            close(INFILE);
+            unlink("/tmp/$session.err");
+         } else { print STDERR "run error for Tokenizer!\n"; exit(1); }
+         $path2Short =~ s/$/\/Tokenizer/;
+      }
+   }
+   # count words of this day, in case this has not been done yet
+   if (! system("LANG=en_US.UTF-8 hadoop fs -test -e \"cache/$path2/_SUCCESS\" 2>/dev/null") == 0) {
+      if (system("LANG=en_US.UTF-8 hadoop fs -test -d \"cache/$path2/\" 2>/dev/null") == 0) {
+         my $counter = 0;
+         while ($counter < 720/$sleep and ! system("LANG=en_US.UTF-8 hadoop fs -test -e \"cache/$path2/_SUCCESS\" 2>/dev/null") == 0) { sleep($sleep); $counter++; }
+         if (! system("LANG=en_US.UTF-8 hadoop fs -test -e \"cache/$path2/_SUCCESS\" 2>/dev/null") == 0) {
+            # system is stuck: delete directory and rerun
+            system("LANG=en_US.UTF-8 hadoop fs -rm -r \"cache/$path2\" 2>/dev/null");
+            $path2 =~ s/\/CountWords$//;
+            $session = int(1+rand(32768)).".".$$;
+            chdir("/home/cloud/java/countwords");
+            &logLine("hadoop $session ".time()." $user countwords $date1-$date2 $search");
+            if ($date1 eq $date2 and $search ne $everything and $_ = fork) { &raisePriority($session); exit(0); }
+            if (open(INFILE,"LANG=en_US.UTF-8 hadoop jar CountWords.jar nl.sara.hadoop.CountWords -libjars CountWords.jar \"cache/$path2\" 2>/tmp/$session.err >/dev/null |")) {
+               close(INFILE);
+               unlink("/tmp/$session.err");
+            } else { print STDERR "run error for CountWords (2)!\n"; exit(1); }
+            $path2 =~ s/$/\/CountWords/;
+         }
+      } else {
+         # hadoop cache does not exist
+         $path2 =~ s/\/CountWords$//;
+         $session = int(1+rand(32768)).".".$$;
+         chdir("/home/cloud/java/countwords");
+         &logLine("hadoop $session ".time()." $user countwords $date1-$date2 $search");
+         if ($date1 eq $date2 and $search ne $everything and $_ = fork) { &raisePriority($session); exit(0); }
+         if (open(INFILE,"LANG=en_US.UTF-8 hadoop jar CountWords.jar nl.sara.hadoop.CountWords -libjars CountWords.jar \"cache/$path2\" 2>/tmp/$session.err >/dev/null |")) {
+            close(INFILE);
+            unlink("/tmp/$session.err");
+         } else { print STDERR "run error for CountWords (2)!\n"; exit(1); }
+         $path2 =~ s/$/\/CountWords/;
+      }
+   }
+
+   if (open(INFILE,"LANG=en_US.UTF-8 hadoop fs -cat \"$path/CountWords/TTest/$path2/TTest/part-r-00000.gz\" | /bin/gunzip -c |")) {
+      open(OUTFILE,">$cache/$cloudAllFile");
+      my $outSize = 0;
+      my %seen = ();
+     if ($search ne $everything) { print OUTFILE "#token\t#t-score\t#frequency-token-in-selection\t#tokens-in-selection\t#types-in-selection\t#frequency-token-in-day\t#tokens-in-day\t#types-in-day\tDATE=$date\tSEARCHTOKEN=$search\n"; }
+      while (<INFILE>) {
+         $line = $_;
+         chomp($line);
+         if ($search ne $everything) { print OUTFILE "$line\n"; $outSize += length($line)+1; }
+         my ($token,$score) = split(/\s+/,$line);
+         if ($token =~ /[a-z0-9]/i and not defined $stopWords{lc($token)} and not defined $search{lc($token)} and not defined $search{"#".lc($token)} and
+             not ($token =~ /^........$/ and $token =~ /([a-zA-Z][0-9]|[a-z][A-Z])/i)) { # suspected url parts
+            if (defined $seen{lc($token)}) {
+               # scores are not combined
+               if ($score > $scores[$seen{lc($token)}]) { 
+                  $tokens[$seen{lc($token)}] = $token;
+                  $scores[$seen{lc($token)}] = $score;
+                  for (my $i=0;$i<=$#scores;$i++) {
+                    if ($i ==0 or $scores[$i] < $min) { $min = $scores[$i]; }
+                  }
+               }
+            } elsif ($#tokens < $MAXTOKENS-1) {
+               push(@tokens,$token);
+               push(@scores,$score);
+               if (not defined $min or $score < $min) { $min = $score; }
+               $seen{lc($token)} = $#tokens;
+            } elsif ($score > $min) {
+               for (my $i=0;$i<=$#scores;$i++) {
+                  if ($scores[$i] == $min) {
+                     delete($seen{lc($tokens[$i])});
+                     $scores[$i] = $score;
+                     $tokens[$i] = $token;
+                     $seen{lc($token)} = $i;
+                     last;
+                  }
+               }
+               for (my $i=0;$i<=$#scores;$i++) {
+                  if ($i ==0 or $scores[$i] < $min) { $min = $scores[$i]; }
+               }
+            }
+         }
+      }
+      close(OUTFILE);
+#     if ($outSize > 10000000) { unlink("$cache/$cloudAllFile"); } # don't keep files > 10Mb
+      close(INFILE);
+      my %scores = ();
+      for (my $i=0;$i<=$#scores;$i++) { $scores{$tokens[$i]} = $scores[$i]; }
+      open(OUTFILE,">$cache/$cloudFile");
+#     binmode(OUTFILE,":UTF-8");
+      foreach my $token (sort { lc($a) cmp lc($b) } keys %scores) {
+         print OUTFILE "$token\t".$scores{$token}."\n";
+      }
+      close(OUTFILE);
+   }
+   if (open(INFILE,"LANG=en_US.UTF-8 hadoop fs -cat \"$path/CountWords/part-r-00000.gz\" | /bin/gunzip -c |")) {
+      my %hashWords = ();
+      my $hashSeen = 0;
+      while (<INFILE>) {
+         my $line = $_;
+         chomp($line);
+         my ($word,$freq) = split(/\t/,$line);
+         if (not defined $freq or $freq !~ /^\d+$/) { next; }
+         if ($word =~ /^#./) { 
+            $hashSeen = 1; 
+            $hashWords{$word} = $freq;
+         } elsif ($hashSeen) { last; }
+      }
+      close(INFILE);
+      if ($hashSeen) {
+         open(OUTFILE,">$cache/$hashFile");
+         foreach my $word (sort { $hashWords{$b} <=> $hashWords{$a} } keys %hashWords) {
+            print OUTFILE "$word\t".$hashWords{$word}."\n";
+         }
+         close(OUTFILE);
+      }
+   }
+}
+
+sub makeExperts() {
+   my ($date,$search) = @_;
+   my $session = int(1+rand(32768)).".".$$;
+   my ($year1,$month1,$day1) = &splitDate($date);
+   my $path = &makePath($date,$search);
+   my $MAXTOKENS = 50;
+   my $min;
+   my %seen = ();
+   my @search = split(/\s|,/,$search);
+   my %search = ();
+   for (my $i=0;$i<=$#search;$i++) { 
+      $search[$i] =~ s/^\@//;
+      $search{lc($search[$i])} = 1; 
+   }
+   if (! system("LANG=en_US.UTF-8 hadoop fs -test -e \"$path/Experts/_SUCCESS\" 2>/dev/null") == 0) {
+      if (system("LANG=en_US.UTF-8 hadoop fs -test -d \"$path/Experts\" 2>/dev/null") == 0) {
+         my $counter = 0;
+         while ($counter < 720/$sleep and ! system("LANG=en_US.UTF-8 hadoop fs -test -e \"$path/Experts/_SUCCESS\" 2>/dev/null") == 0) { sleep($sleep); $counter++; }
+         if (! system("LANG=en_US.UTF-8 hadoop fs -test -e \"$path/Experts/_SUCCESS\" 2>/dev/null") == 0) {
+            # system is stuck: delete directory and rerun
+            system("LANG=en_US.UTF-8 hadoop fs -rm -r \"$path/Experts\" 2>/dev/null");
+            chdir("/home/cloud/java/experts");
+            &logLine("hadoop $session ".time()." $user users $date1-$date2 $search");
+            if (open(INFILE,"LANG=en_US.UTF-8 hadoop jar Experts.jar nl.sara.hadoop.Experts -libjars json-simple-1.1.1.jar,Experts.jar \"$path\" 2>/tmp/$session.err >/dev/null |")) {
+               close(INFILE);
+               unlink("/tmp/$session.err");
+            } else { print STDERR "run error for Experts (1)!\n"; exit(1); }
+         }
+      } else {
+         # expert directory hoes not exist on hadoop cluster
+         chdir("/home/cloud/java/experts");
+         &logLine("hadoop $session ".time()." $user users $date1-$date2 $search");
+         if (open(INFILE,"LANG=en_US.UTF-8 hadoop jar Experts.jar nl.sara.hadoop.Experts -libjars json-simple-1.1.1.jar,Experts.jar \"$path\" 2>/tmp/$session.err >/dev/null |")) {
+            close(INFILE);
+            unlink("/tmp/$session.err");
+         } else { print STDERR "run error for Experts (1)!\n"; exit(1); }
+      }
+   }
+   if (open(INFILE,"LANG=en_US.UTF-8 hadoop fs -cat \"$path/Experts/part-r-00000.gz\" | /bin/gunzip -c |")) {
+      open(OUTFILE,">$cache/$expertsAllFile");
+#     binmode(OUTFILE,":UTF-8");
+      if ($search ne $everything) { print OUTFILE "#token\t#score\t#tweets-written\t#mentions\tDATE=$date\tSEARCHTOKEN=$search\n"; }
+      while (<INFILE>) {
+         $line = $_;
+         chomp($line);
+         my ($token,$tweets,$mentions) = split(/\s+/,$line);
+         my $score = $tweets+5*$mentions; # made up this formula 
+#&logLine(">>> ".$tokens[0]." ".$scores[0]." $min $token $score");
+         $line = "$token\t$score\t$tweets\t$mentions";
+         if ($search ne $everything) { print OUTFILE "$line\n"; }
+         if (defined $search{lc($token)}) { next; }
+         if ($#tokens < $MAXTOKENS-1) {
+            push(@tokens,$token);
+            push(@scores,$score);
+            if (not defined $min or $score < $min) { $min = $score; }
+            $seen{lc($token)} = $#tokens;
+         } elsif ($score > $min) {
+            for (my $i=0;$i<=$#scores;$i++) {
+               if ($scores[$i] == $min) {
+                  delete($seen{lc($tokens[$i])});
+                  $scores[$i] = $score;
+                  $tokens[$i] = $token;
+                  $seen{lc($token)} = $i;
+                  last;
+               }
+            }
+            for (my $i=0;$i<=$#scores;$i++) {
+               if ($i ==0 or $scores[$i] < $min) { $min = $scores[$i]; }
+            }
+         }
+      }
+      close(OUTFILE);
+      close(INFILE);
+      my %scores = ();
+      for (my $i=0;$i<=$#scores;$i++) { $scores{$tokens[$i]} = $scores[$i]; }
+      open(OUTFILE,">$cache/$expertsFile");
+#     binmode(OUTFILE,":UTF-8");
+      foreach my $token (sort { lc($a) cmp lc($b) } keys %scores) {
+         print OUTFILE "$token\t".$scores{$token}."\n";
+      }
+      close(OUTFILE);
+   } 
+}
+
+sub showCloud() {
+   my ($date,$search) = @_;
+   my $session = int(1+rand(32768)).".".$$;
+   my ($year1,$month1,$day1) = &splitDate($date);
+   my $MAXFONTSIZE = 200;
+   my $min;
+   my @tokens;
+   my @scores;
+   my $path = &makePath($date,$search);
+   if (open(INFILE,"$cache/$cloudFile")) { close(INFILE); }
+   else {
+      my ($yesterdayY,$yesterdayM,$yesterdayD) = &yesterday($year1,$month1,$day1);
+      my $nextPath = "$yesterdayY/$yesterdayM/$yesterdayD/Tokenizer/CountWords";
+      my $subtract = "no";
+      if ($search eq "twinl-sent-pos") { $nextPath = "$date/Search/twinl-sent-neg/CountWords"; $subtract = "no"; }
+      if ($search eq "twinl-sent-neg") { $nextPath = "$date/Search/twinl-sent-pos/CountWords"; $subtract = "no"; }
+      if ($search =~ /^twinl-sent-pos\+(.*)$/) { $nextPath = "$date/Search/twinl-sent-neg+$1/CountWords"; $subtract = "no"; }
+      if ($search =~ /^twinl-sent-neg\+(.*)$/) { $nextPath = "$date/Search/twinl-sent-pos+$1/CountWords"; $subtract = "no"; }
+      if ($search eq "twinl-gender-f") { $nextPath = "$date/Search/twinl-gender-m/CountWords"; $subtract = "no"; }
+      if ($search eq "twinl-gender-m") { $nextPath = "$date/Search/twinl-gender-f/CountWords"; $subtract = "no"; }
+      if ($search eq "twinl-age-17") { $nextPath = "$date/Search/twinl-age-21,twinl-age-26/CountWords"; $subtract = "no"; }
+      if ($search eq "twinl-age-21") { $nextPath = "$date/Search/twinl-age-17,twinl-age-26/CountWords"; $subtract = "no"; }
+      if ($search eq "twinl-age-26") { $nextPath = "$date/Search/twinl-age-17,twinl-age-21/CountWords"; $subtract = "no"; }
+      if (! system("LANG=en_US.UTF-8 hadoop fs -test -e \"$path/CountWords/TTest/$nextPath/TTest/_SUCCESS\" 2>/dev/null") == 0) {
+         if (system("LANG=en_US.UTF-8 hadoop fs -test -d \"$path/CountWords/TTest/$nextPath/TTest\" 2>/dev/null") == 0) {
+            my $counter = 0;
+            while ($counter < 720/$sleep and ! system("LANG=en_US.UTF-8 hadoop fs -test -e \"$path/CountWords/TTest/$nextPath/TTest/_SUCCESS\" 2>/dev/null") == 0) { sleep($sleep); $counter++; }
+            if (! system("LANG=en_US.UTF-8 hadoop fs -test -e \"$path/CountWords/TTest/$nextPath/TTest/_SUCCESS\" 2>/dev/null") == 0) {
+               # system is stuck: delete directory and rerun
+               system("LANG=en_US.UTF-8 hadoop fs -rm -r \"$path/CountWords/TTest/$nextPath/TTest\" 2>/dev/null");
+               # 20140811 is this enough? we assume that all earlier processes succeeded
+               chdir("/home/cloud/java/ttest");
+               &logLine("hadoop $session ".time()." $user ttest $date1-$date2 $search");
+               ($typesQuery,$tokensQuery) = &getTypesAndTokens("$path/CountWords");
+               ($typesReference,$tokensReference) = &getTypesAndTokens("cache/$nextPath");
+               if (open(INFILE,"LANG=en_US.UTF-8 hadoop jar TTest.jar nl.sara.hadoop.TTest -libjars TTest.jar \"$path/CountWords/part-r-00000.gz\" \"cache/$nextPath/part-r-00000.gz\" $typesQuery $tokensQuery $typesReference $tokensReference $subtract 2>/tmp/$session.err >/dev/null |")) {
+                  close(INFILE);
+                  unlink("/tmp/$session.err");
+               } else { print STDERR "run error for CountWords (2)!\n"; exit(1); }
+            }
+         } else {
+            # tokenize this day, in case this has not been done yet
+            my $nextPathShort = $nextPath;
+            $nextPathShort =~ s/\/CountWords$//;
+            if ($nextPathShort =~ /twinl-/) { $nextPathShort =~ s/^/cache\//; }
+            else { $nextPathShort =~ s/^/twitter\//; }
+            if (! system("LANG=en_US.UTF-8 hadoop fs -test -e \"$nextPathShort/_SUCCESS\" 2>/dev/null") == 0) {
+               if (system("LANG=en_US.UTF-8 hadoop fs -test -d \"$nextPathShort\" 2>/dev/null") == 0) {
+                  my $counter = 0;
+                  while ($counter < 720/$sleep and ! system("LANG=en_US.UTF-8 hadoop fs -test -e \"$nextPathShort/_SUCCESS\" 2>/dev/null") == 0) { sleep($sleep); $counter++; }
+                  if (! system("LANG=en_US.UTF-8 hadoop fs -test -e \"$nextPathShort/_SUCCESS\" 2>/dev/null") == 0) {
+                     # system is stuck: delete directory and rerun
+                     system("LANG=en_US.UTF-8 hadoop fs -rm -r \"$nextPathShort\" 2>/dev/null");
+                     $nextPathShort =~ s/\/Tokenizer$//;
+                     $session = int(1+rand(32768)).".".$$;
+                     chdir("/home/cloud/java/tokenizer");
+                     &logLine("hadoop $session ".time()." $user tokenizer $date1-$date2 $search");
+                     if ($date1 eq $date2 and $search ne $everything and $_ = fork) { &raisePriority($session); exit(0); }
+                     if (open(INFILE,"LANG=en_US.UTF-8 hadoop jar Tokenizer.jar nl.sara.hadoop.Tokenizer -libjars json-simple-1.1.1.jar,Tokenizer.jar \"$nextPathShort\" 2>/tmp/$session.err >/dev/null |")) {
+                        close(INFILE);
+                        unlink("/tmp/$session.err");
+                     } else { print STDERR "run error for Tokenizer!\n"; exit(1); }
+                     $nextPathShort =~ s/$/\/Tokenizer/;
+                  }
+               } elsif ($nextPathShort =~ /\/Tokenizer$/) { # otherwise: give up
+                  # hadoop cache does not exist
+                  $nextPathShort =~ s/\/Tokenizer$//;
+                  $session = int(1+rand(32768)).".".$$;
+                  chdir("/home/cloud/java/tokenizer");
+                  &logLine("hadoop $session ".time()." $user tokenizer $date1-$date2 $search");
+                  if ($date1 eq $date2 and $search ne $everything and $_ = fork) { &raisePriority($session); exit(0); }
+                  if (open(INFILE,"LANG=en_US.UTF-8 hadoop jar Tokenizer.jar nl.sara.hadoop.Tokenizer -libjars json-simple-1.1.1.jar,Tokenizer.jar \"$nextPathShort\" 2>/tmp/$session.err >/dev/null |")) {
+                     close(INFILE);
+                     unlink("/tmp/$session.err");
+                  } else { print STDERR "run error for Tokenizer!\n"; exit(1); }
+                  $nextPathShort =~ s/$/\/Tokenizer/;
+               }
+            }
+            # count words of this day, in case this has not been done yet
+            if (! system("LANG=en_US.UTF-8 hadoop fs -test -e \"cache/$nextPath/_SUCCESS\" 2>/dev/null") == 0) {
+               if (system("LANG=en_US.UTF-8 hadoop fs -test -d \"cache/$nextPath\" 2>/dev/null") == 0) {
+                  my $counter = 0;
+                  while ($counter < 720/$sleep and ! system("LANG=en_US.UTF-8 hadoop fs -test -e \"cache/$nextPath/_SUCCESS\" 2>/dev/null") == 0) { sleep($sleep); $counter++; }
+                  if (! system("LANG=en_US.UTF-8 hadoop fs -test -e \"cache/$nextPath/_SUCCESS\" 2>/dev/null") == 0) {
+                     # system is stuck: delete directory and rerun
+                     system("LANG=en_US.UTF-8 hadoop fs -rm -r \"cache/$nextPath\" 2>/dev/null");
+                     $nextPath =~ s/\/CountWords$//;
+                     $session = int(1+rand(32768)).".".$$;
+                     chdir("/home/cloud/java/countwords");
+                     &logLine("hadoop $session ".time()." $user countwords $date1-$date2 $search");
+                     if ($date1 eq $date2 and $search ne $everything and $_ = fork) { &raisePriority($session); exit(0); }
+                     if (open(INFILE,"LANG=en_US.UTF-8 hadoop jar CountWords.jar nl.sara.hadoop.CountWords -libjars CountWords.jar \"cache/$nextPath\" 2>/tmp/$session.err >/dev/null |")) {
+                        close(INFILE);
+                        unlink("/tmp/$session.err");
+                     } else { print STDERR "run error for CountWords (2.5)!\n"; exit(1); }
+                     $nextPath =~ s/$/\/CountWords/;
+                  }
+               } else {
+                  # hadoop cache does not exist
+                  $nextPath =~ s/\/CountWords$//;
+                  $session = int(1+rand(32768)).".".$$;
+                  chdir("/home/cloud/java/countwords");
+                  &logLine("hadoop $session ".time()." $user countwords $date1-$date2 $search");
+                  if ($date1 eq $date2 and $search ne $everything and $_ = fork) { &raisePriority($session); exit(0); }
+                  if (open(INFILE,"LANG=en_US.UTF-8 hadoop jar CountWords.jar nl.sara.hadoop.CountWords -libjars CountWords.jar \"cache/$nextPath\" 2>/tmp/$session.err >/dev/null |")) {
+                     close(INFILE);
+                     unlink("/tmp/$session.err");
+                  } else { print STDERR "run error for CountWords (2)!\n"; exit(1); }
+                  $nextPath =~ s/$/\/CountWords/;
+               }
+            }
+
+            # count words, in case this has not been done yet
+            if (! system("LANG=en_US.UTF-8 hadoop fs -test -e \"$path/CountWords/_SUCCESS\" 2>/dev/null") == 0) {
+               if (system("LANG=en_US.UTF-8 hadoop fs -test -d \"$path/CountWords\" 2>/dev/null") == 0) {
+                  my $counter = 0;
+                  while ($counter < 720/$sleep and ! system("LANG=en_US.UTF-8 hadoop fs -test -e \"$path/CountWords/_SUCCESS\" 2>/dev/null") == 0) { sleep($sleep); $counter++; }
+                  if (! system("LANG=en_US.UTF-8 hadoop fs -test -e \"$path/CountWords/_SUCCESS\" 2>/dev/null") == 0) {
+                     # system is stuck: delete directory and rerun
+                     system("LANG=en_US.UTF-8 hadoop fs -rm -r \"$path/CountWords\" 2>/dev/null");
+                     chdir("/home/cloud/java/countwords");
+                     &logLine("hadoop $session ".time()." $user countwords $date1-$date2 $search");
+                     if (open(INFILE,"LANG=en_US.UTF-8 hadoop jar CountWords.jar nl.sara.hadoop.CountWords -libjars CountWords.jar \"$path\" 2>/tmp/$session.err >/dev/null |")) {
+                        close(INFILE);
+                        unlink("/tmp/$session.err");
+                     } else { print STDERR "run error for CountWords (1.5)!\n"; exit(1); }
+                  }
+               } else {
+                  # hadoop cache does not exist
+                  chdir("/home/cloud/java/countwords");
+                  &logLine("hadoop $session ".time()." $user countwords $date1-$date2 $search");
+                  if (open(INFILE,"LANG=en_US.UTF-8 hadoop jar CountWords.jar nl.sara.hadoop.CountWords -libjars CountWords.jar \"$path\" 2>/tmp/$session.err >/dev/null |")) {
+                     close(INFILE);
+                     unlink("/tmp/$session.err");
+                  } else { print STDERR "run error for CountWords (1)!\n"; exit(1); }
+               }
+            }
+            # create comparison directory in case it does not exist
+            if (! system("LANG=en_US.UTF-8 hadoop fs -test -e \"cache/$nextPath/_SUCCESS\" 2>/dev/null") == 0) {
+               if (system("LANG=en_US.UTF-8 hadoop fs -test -d \"cache/$nextPath\" 2>/dev/null") == 0) {
+                  my $counter = 0;
+                  while ($counter < 720/$sleep and ! system("LANG=en_US.UTF-8 hadoop fs -test -e \"cache/$nextPath/_SUCCESS\" 2>/dev/null") == 0) { sleep($sleep); $counter++; }
+                  if (! system("LANG=en_US.UTF-8 hadoop fs -test -e \"cache/$nextPath/_SUCCESS\" 2>/dev/null") == 0) {
+                     # system is stuck: delete directory and rerun
+                     system("LANG=en_US.UTF-8 hadoop fs -rm -r \"cache/$nextPath\" 2>/dev/null");
+                     my @fields = split(/\//,$nextPath);
+                     if (not defined $fields[2] or $fields[1] ne "Search") { return(); }
+                     my $date = $fields[0];
+                     my $comparison = $fields[2];
+                     &searcher($date,$comparison);
+                  }
+               } else {
+                  my @fields = split(/\//,$nextPath);
+                  if (not defined $fields[2] or $fields[1] ne "Search") { return(); }
+                  my $date = $fields[0];
+                  my $comparison = $fields[2];
+                  &searcher($date,$comparison);
+               }
+            }
+            # hadoop cache does not exist: create it
+            chdir("/home/cloud/java/ttest");
+            &logLine("hadoop $session ".time()." $user ttest $date1-$date2 $search");
+            ($typesQuery,$tokensQuery) = &getTypesAndTokens("$path/CountWords");
+            ($typesReference,$tokensReference) = &getTypesAndTokens("cache/$nextPath");
+            if (open(INFILE,"LANG=en_US.UTF-8 hadoop jar TTest.jar nl.sara.hadoop.TTest -libjars TTest.jar \"$path/CountWords/part-r-00000.gz\" \"cache/$nextPath/part-r-00000.gz\" $typesQuery $tokensQuery $typesReference $tokensReference $subtract 2>/tmp/$session.err >/dev/null |")) {
+               close(INFILE);
+               unlink("/tmp/$session.err");
+            } else { print STDERR "run error for CountWords (2)!\n"; exit(1); }
+         }
+      }
+      &makeCloud($date,$search);
+   }
+   if (open(INFILE,"$cache/$cloudFile")) {
+      while (<INFILE>) {
+         $line = $_;
+         chomp($line);
+         my ($token,$score) = split(/\s+/,$line);
+         push(@tokens,$token);
+         push(@scores,$score);
+      }
+      close(INFILE);
+   }
+   if ($#tokens < 0) { 
+      print "<p>\nDe woordenwolk is nog niet beschikbaar\n"; 
+      unlink("$cache/$cloudFile");
+   } else {
+      print "Dit zijn de belangrijkste verwante woorden:\n"; 
+      my $max;
+      my %scores = ();
+      for (my $i=0;$i<=$#scores;$i++) {
+         if ($i ==0 or $scores[$i] > $max) { $max = $scores[$i]; }
+         if ($i ==0 or $scores[$i] < $min) { $min = $scores[$i]; }
+         $scores{$tokens[$i]} = $scores[$i];
+      }
+      print "<p style=\"font-family:sans-serif;\">\n";
+      foreach my $token (sort { lc($a) cmp lc($b) } keys %scores) {
+         $size = $max > $min ? int(75+($MAXFONTSIZE*($scores{$token}-$min)/($max-$min))) : 100;
+         print "<a class=\"cloud\" target=\"_parent\" href=\"http://twitter.com/search/realtime?q=$token\"><font style=\"font-size:$size\%\" color=\"$cloudForeground\">$token</font></a>\n";
+      }
+      print <<THEEND;
+<p>
+Klik op een woord om het op Twitter te bekijken.
+THEEND
+      if ($search ne $everything) {
+         my $searchUrl = $search;
+         $searchUrl =~ s/\+/%2B/g;
+         $searchUrl =~ s/#/%23/g;
+         print <<THEEND;
+<p>
+<small>(<a target=\"_parent\" href="$url?DATE=$date\&SEARCH=$searchUrl\&DOWNLOAD\&SHOWCLOUD">download data van woordenwolk</a>)</small>
+THEEND
+      }
+      if (-f "$cache/$hashFile") {
+         my $searchUrl = $search;
+         $searchUrl =~ s/\+/%2B/g;
+         $searchUrl =~ s/#/%23/g;
+         print <<THEEND;
+<p>
+<small>(<a target=\"_parent\" href="$url?DATE=$date\&SEARCH=$searchUrl\&DOWNLOAD\&SHOWHASH">download hashtags</a>)</small>
+THEEND
+      }
+   }
+}
+
+sub showSentiment() {
+   my ($date,$search) = @_;
+   if (not defined $search) { print STDERR "error: invalid arguments for showSentiment()\n"; return(); }
+   my $imgFile = "sentiment.$date.$search.svg";
+   my $dataFile = "sentiment.$date.$search.data";
+   if (! -f "$cache/$imgFile") { system("LANG=en_US.UTF-8 /usr/bin/perl /home/cloud/bin/makeSentiment.pl $date \"$search\""); }
+   if (! open(INFILE,"$cache/$dataFile")) { print STDERR "showSentiment(): error: cannot open data file $cache/$dataFile\n"; return(); }
+   my $sentiment = <INFILE>;
+   if (not defined $sentiment) { print STDERR "showSentiment(): error: empty data file $cache/$dataFile\n"; return(); }
+   chomp($sentiment);
+   close(INFILE);
+   if ($sentiment >= 0) { $sentiment = sprintf "%d",(0.5+100*$sentiment); }
+   else { $sentiment = sprintf "%d",(-0.5+100*$sentiment); }
+   if ($sentiment > 0) { $sentiment = "+".$sentiment; }
+   my $safeImg = $imgFile;
+   $safeImg =~ s/\+/%2B/g;
+   $safeImg =~ s/#/%23/g;
+   print <<THEEND;
+<p>
+<table>
+<tr>
+<td>
+<p style="text-align: center;">
+<strong>Sentiment</strong>: $sentiment
+<p>
+<object data="/cache/$safeImg" type="image/svg+xml" width="250" height="250"></object>
+</td>
+THEEND
+   if ($search =~ /^twinl-geo/) { &showSentMap($date,$search); }
+   print "</tr>\n</table>\n";
+   my $sentimentFile = "sentiment.$date.$search.txt.gz";
+   if (-f "$cache/$sentimentFile") {
+      print <<THEEND;
+<p>
+<small>(<a target="_parent" href="/cache/$sentimentFile">download data van de sentimentanalyse</a>)</small>
+THEEND
+   }
+}
+
+sub showSentMap() {
+   my ($date,$search) = @_;
+   if (not defined $search) { print STDERR "error: invalid arguments for showSentMap()\n"; return(); }
+   my $imgFile = "sentmap.$date.$search.svg";
+   my $largeImgFile = "sentmap.$date.$search.large.svg";
+   if (! -f "$cache/$imgFile") { system("LANG=en_US.UTF-8 /usr/bin/perl /home/cloud/bin/makeSentMap.pl $date \"$search\""); }
+   if (! -f "$cache/$imgFile") { print STDERR "showSentMap(): error: cannot open file $cache/$imgFile\n"; return(); }
+   my $safeImg = $imgFile;
+   $safeImg =~ s/\+/%2B/g;
+   $safeImg =~ s/#/%23/g;
+   my $safeLargeImg = $largeImgFile;
+   $safeLargeImg =~ s/\+/%2B/g;
+   $safeLargeImg =~ s/#/%23/g;
+   print <<THEEND;
+<td>
+  <p style="text-align: center;">
+    <a class="thumbnail" href="#thumb">
+      <object data="/cache/$safeImg" type="image/svg+xml" width="515" height="285"></object>
+      <span><object data="/cache/$safeLargeImg" type="image/svg+xml" width="1030" height="570"></object></span>
+    </a>
+  </p>
+</td>
+THEEND
+   return();
+}
+
+sub showExperts() {
+   my ($date,$search) = @_;
+   my ($year1,$month1,$day1) = &splitDate($date);
+   my $MAXFONTSIZE = 200;
+   my $min;
+   my @tokens;
+   my @scores;
+   my $path = &makePath($date,$search);
+   if (open(INFILE,"$cache/$expertsFile")) { close(INFILE); }
+   else { &makeExperts($date,$search); }
+   if (open(INFILE,"$cache/$expertsFile")) {
+      while (<INFILE>) {
+         $line = $_;
+         chomp($line);
+         my ($token,$score) = split(/\s+/,$line);
+         push(@tokens,$token);
+         push(@scores,$score);
+      }
+      close(INFILE);
+   }
+   if ($#tokens < 0) { 
+      print "<p>\nDe gebruikerswolk is nog niet beschikbaar\n"; 
+      unlink("$cache/$expertsFile");
+   } else {
+      print "<p>\nDit zijn de belangrijkste gebruikers voor dit onderwerp:\n"; 
+      my $max;
+      my %scores = ();
+      for (my $i=0;$i<=$#scores;$i++) {
+         if ($i ==0 or $scores[$i] > $max) { $max = $scores[$i]; }
+         if ($i ==0 or $scores[$i] < $min) { $min = $scores[$i]; }
+         $scores{$tokens[$i]} = $scores[$i];
+      }
+      print "<p style=\"font-family:sans-serif;\">\n";
+      foreach my $token (sort { lc($a) cmp lc($b) } keys %scores) {
+         $size = $max > $min ? int(75+($MAXFONTSIZE*($scores{$token}-$min)/($max-$min))) : 100;
+         print "<a class=\"cloud\" target=\"_parent\" href=\"http://twitter.com/$token\"><font style=\"font-size:$size\%\">$token</font></a>\n";
+      }
+      print <<THEEND;
+<p>
+Klik op een gebruikersnaam om zijn of haar tweets op Twitter te bekijken.
+THEEND
+      if ($search ne $everything) {
+         my $searchUrl = $search;
+         $searchUrl =~ s/\+/%2B/g;
+         $searchUrl =~ s/#/%23/g;
+         print <<THEEND;
+<p>
+<small>(<a target="_parent" href="$url?DATE=$date\&SEARCH=$searchUrl\&DOWNLOAD\&SHOWUSERS">download data van deze gebruikerswolk</a>)</small>
+THEEND
+         my $userFile = "user.$date.$search.txt.gz";
+         if (-f "$cache/$userFile") {
+            print <<THEEND;
+<small>(<a target="_parent" href="/cache/$userFile">download data van de gebruikersanalyse</a>)</small>
+THEEND
+         }
+      }
+   }
+}
+
+sub makeRandomString() {
+   my $length = shift(@_);
+   my $chars = "0123456789abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ";
+   my @chars = split(//,$chars);
+   my $s = "";
+   for (my $i=0;$i<$length;$i++) { $s .= $chars[int(rand($#chars+1))]; }
+   return($s);
+}
+
+# create cookie
+sub setCookie() {
+   my $user = shift(@_);
+   if ($user eq "guest") { return(); }
+   my $file = &makeRandomString(16);
+   my $myCookie = cookie(-name => "cookie",
+                         -value => $file);
+                         # -expires => "+60m");
+   if (open(OUTFILE,">$baseDir/cookies/$file")) {
+      print OUTFILE "$user ".$ENV{"REMOTE_ADDR"}."\n";
+      close(OUTFILE);
+   }
+   return($myCookie);
+}
+
+# returns the difference between to dates in seconds
+sub diffDate() {
+   my ($date) = shift(@_);
+   my ($year1,$month1,$day1,$hour1,$year2,$month2,$day2,$hour2) = &splitDate($date);
+   my $diffHours = 1+$hour2-$hour1;
+   my $diffDays = $day2-$day1;
+   if ($year1 == $year2 and $month1 == $month2) { return(3600*$diffHours+24*3600*$diffDays); }
+   $diffDays = &maxDays($year1,$month1)-$day1+$day2;
+   if ($year1 == $year2) {
+      for (my $m=$month1+1;$m<$month2;$m++) { $diffDays += &maxDays($year1,$m); }
+   } else {
+      for (my $y=$year1;$y<=$year2;$y++) {
+         for (my $m=1;$m<=12;$m++) {
+            if ($y == $year1 and $m > $month1) { $diffDays += &maxDays($y,$m); }
+            elsif ($y > $year1 and $y < $year2) { $diffDays += &maxDays($y,$m); }
+            elsif ($y == $year2 and $m < $month2) { $diffDays += &maxDays($y,$m); }
+         }
+      }
+   }
+   return(3600*$diffHours+24*3600*$diffDays);
+}
+
+sub about() {
+   print <<THEEND;
+<hr>
+<small>
+Op twiqs.nl kan je in Nederlandstalige tweets vanaf december 2010 zoeken. 
+De gevonden tweets kan je dan op Twitter bekijken. De zoekdatabase is niet
+compleet.  Contactpersoon voor deze website is Erik Tjong Kim Sang 
+&lt;$MAIL&gt;
+</small>
+THEEND
+}
+
+# make pie charts of description data
+sub makeDescPies() {
+   my ($date,$search) = @_;
+   my $session = int(1+rand(32768)).".".$$;
+   my $hcache = &makePath($date,$search);
+   my $descFile = "desc.$date.$search.txt";
+   my $descdataFile = "descdata.$date.$search.txt";
+   # check if the descriptions are available
+   if (! system("LANG=en_US.UTF-8 hadoop fs -test -e \"$hcache/Description/_SUCCESS\" 2>/dev/null") == 0) {
+      if (system("LANG=en_US.UTF-8 hadoop fs -test -d \"$hcache/Description\" 2>/dev/null") == 0) {
+         my $counter = 0;
+         while ($counter < 720/$sleep and ! system("LANG=en_US.UTF-8 hadoop fs -test -e \"$hcache/Description/_SUCCESS\" 2>/dev/null") == 0) { sleep($sleep); $counter++; }
+         if (! system("LANG=en_US.UTF-8 hadoop fs -test -e \"$hcache/Description/_SUCCESS\" 2>/dev/null") == 0) {
+            # system is stuck: delete directory and rerun
+            system("LANG=en_US.UTF-8 hadoop fs -rm -r \"$hcache/Description\" 2>/dev/null");
+            chdir("/home/cloud/java/description");
+            &logLine("hadoop $session ".time()." $user description $date1-$date2 $search");
+            if (open(INFILE,"LANG=en_US.UTF-8 hadoop jar Description.jar nl.sara.hadoop.Description -libjars json-simple-1.1.1.jar,Description.jar \"$hcache\" 2>/tmp/$session.err >/dev/null |")) {
+               close(INFILE);
+               unlink("/tmp/$session.err");
+            } else { &errlog("run error for Description (1)!"); exit(1); }
+         }
+      } else {
+         # no description data: create it
+         chdir("/home/cloud/java/description");
+         &logLine("hadoop $session ".time()." $user description $date1-$date2 $search");
+         if (open(INFILE,"LANG=en_US.UTF-8 hadoop jar Description.jar nl.sara.hadoop.Description -libjars json-simple-1.1.1.jar,Description.jar \"$hcache\" 2>/tmp/$session.err >/dev/null |")) {
+            close(INFILE);
+            unlink("/tmp/$session.err");
+         } else { &errlog("run error for Description (1)!"); exit(1); }
+      }
+   }
+   if (! system("LANG=en_US.UTF-8 hadoop fs -test -e \"$hcache/Description/_SUCCESS\" 2>/dev/null") == 0) {
+      # something is wrong
+      &errlog("creation of description data failed");
+      return();
+   }
+   sleep(5);
+   # process description data
+   if (open(INFILE,"LANG=en_US.UTF-8 hadoop fs -cat \"$hcache\"/Description/p* | /bin/gunzip -c | (cd /home/cloud/java/search; /usr/bin/java nl.sara.hadoop.GuessAge) |")) {
+      # expected input format:
+      # leeftijd <  18: 20%
+      # leeftijd <  26: 20%
+      # leeftijd >= 26: 60%
+      #         mannen: 61%
+      #        vrouwen: 39%
+      my @percs = ();
+      while (<INFILE>) {
+         my $line = $_;
+         chomp($line);
+         my @fields = split(/[:%]/,$line);
+         push(@percs,$fields[1]);
+         $percs[$#percs] =~ s/\s//g;
+      }
+      # store percentages in file for web demo
+      my $border = 90;
+      if (not defined $percs[4]) {
+         &errlog("incomplete description data");  
+      } elsif (open(OUTFILE,">$cache/$descdataFile")) {
+         # make sure percentages sum up to 100
+         for (my $i=0;$i<=4;$i++) { $percs[$i] = int($percs[$i]+0.5); }
+         my $total = $percs[0]+$percs[1]+$percs[2];
+         if ($percs[2] > $percs[1] and $percs[2] > $percs[0]) { $percs[2] += 100-$total; }
+         elsif ($percs[1] > $percs[0] and $percs[1] > $percs[2]) { $percs[1] += 100-$total; }
+         elsif ($total != 0 or $percs[0] != 0) { $percs[0] += 100-$total; }
+         $total = $percs[3]+$percs[4];
+         if ($percs[4] > $percs[3]) { $percs[4] += 100-$total; }
+         elsif ($total != 0 or $percs[3] != 0) { $percs[3] += 100-$total; }
+         print OUTFILE "@percs\n";
+         close(OUTFILE);
+         $border = int(90.5+(360*$percs[4]/100));
+      } else { &errlog("cannot write $cache/$descdataFile"); }
+      my $descImg = "gender.$date.$search.svg";
+      if (open(OUTFILE,">$cache/$descFile")) {
+         print OUTFILE <<THEEND;
+set term svg font 'arial,11' size 320,320
+set output "$cache/$descImg"
+
+set size ratio -1
+set style fill solid 1.0 border -1
+THEEND
+         if ($percs[3] == 0 and $percs[4] == 0) {
+            print OUTFILE <<THEEND;
+set obj 10 circle at screen .5,.5   size screen .4  front
+set obj 10 circle arc [ 0 : 360] fc rgb "white" 
+THEEND
+         } elsif ($border == 90) {
+            print OUTFILE <<THEEND;
+set obj 10 circle at screen .5,.5   size screen .4  front
+set obj 10 circle arc [ 0 : 360] fc rgb "light-blue" 
+THEEND
+         } elsif ($border == 450) {
+            print OUTFILE <<THEEND;
+set obj 11 circle at screen .5,.5   size screen .4  front
+set obj 11 circle arc [0 : 360] fc rgb "pink" 
+THEEND
+         } else {
+            print OUTFILE <<THEEND;
+set obj 10 circle at screen .5,.5   size screen .4  front
+set obj 10 circle arc [ 90 : $border] fc rgb "pink" 
+set obj 11 circle at screen .5,.5   size screen .4  front
+set obj 11 circle arc [$border : 450] fc rgb "light-blue" 
+THEEND
+         }
+         print OUTFILE <<THEEND;
+# plot world map and correspondent locations as a circle
+set title ""
+set xlabel ""
+unset key
+unset xtics
+unset ytics
+unset border
+set xrange [0:1]
+set yrange [0:1]
+
+plot -1
+THEEND
+         close(OUTFILE);
+         system("LANG=en_US.UTF-8 /usr/bin/gnuplot \"$cache/$descFile\"");
+      } else { &errlog("cannot write $descFile\n"); }
+      my $border1 = 90;
+      my $border2 = 90;
+      if (defined $percs[1] and defined $percs[2]) {
+         $border1 = int(90.5+(360*$percs[2]/100));
+         $border2 = int(90.5+(360*($percs[1]+$percs[2])/100));
+      }
+      $descImg = "age.$date.$search.svg";
+      if (open(OUTFILE,">$cache/$descFile")) {
+         print OUTFILE <<THEEND;
+set term svg font 'arial,11' size 320,320
+set output "$cache/$descImg"
+
+set size ratio -1
+set style fill solid 1.0 border -1
+THEEND
+         if ($percs[0] == 0 and $percs[1] == 0 and $percs[2] == 0) {
+            print OUTFILE <<THEEND;
+set obj 10 circle at screen .5,.5 size screen .4  front
+set obj 10 circle arc [0 : 360] fc rgb "white" 
+THEEND
+         } elsif ($border1 == 90 and $border2 == 90) {
+            print OUTFILE <<THEEND;
+set obj 10 circle at screen .5,.5 size screen .4  front
+set obj 10 circle arc [0 : 360] fc rgb "green" 
+THEEND
+         } elsif ($border1 ==90 and $border2 == 450) {
+            print OUTFILE <<THEEND;
+set obj 11 circle at screen .5,.5 size screen .4  front
+set obj 11 circle arc [0 : 360] fc rgb "red" 
+THEEND
+         } elsif ($border1 == 450 and $border2 == 450) {
+            print OUTFILE <<THEEND;
+set obj 12 circle at screen .5,.5 size screen .4  front
+set obj 12 circle arc [0 : 360] fc rgb "blue" 
+THEEND
+         } else {
+            print OUTFILE <<THEEND;
+set obj 10 circle at screen .5,.5 size screen .4  front
+set obj 10 circle arc [ 90 : $border1] fc rgb "blue" 
+set obj 11 circle at screen .5,.5 size screen .4  front
+set obj 11 circle arc [$border1 : $border2] fc rgb "red" 
+set obj 12 circle at screen .5,.5 size screen .4  front
+set obj 12 circle arc [$border2 : 450] fc rgb "green" 
+THEEND
+         }
+         print OUTFILE <<THEEND;
+# plot world map and correspondent locations as a circle
+set title ""
+set xlabel ""
+unset key
+unset xtics
+unset ytics
+unset border
+set xrange [0:1]
+set yrange [0:1]
+
+plot -1
+THEEND
+         close(OUTFILE);
+         system("LANG=en_US.UTF-8 /usr/bin/gnuplot \"$cache/$descFile\"");
+      } else { &errlog("cannot write $descFile\n"); }
+   } else { &errlog("cannot read description data"); }
+}
+
+# not used yet
+sub savePie() {
+   my $descFile = shift(@_);
+   my $descImg = shift(@_);
+   my @borders = @_;
+
+   if (open(OUTFILE,">$cache/$descFile")) {
+      print OUTFILE <<THEEND;
+set term svg font 'arial,11' size 320,320
+set output "$cache/$descImg"
+
+set size ratio -1
+set style fill solid 1.0 border -1
+
+set obj 10 circle   arc [ 90 : $border] fc rgb "pink"
+set obj 15 circle   arc [$border : 450] fc rgb "light-blue"
+
+set obj 10 circle at screen .5,.5   size screen .4  front
+set obj 15 circle at screen .5,.5   size screen .4  front
+
+# plot world map and correspondent locations as a circle
+set title ""
+set xlabel ""
+unset key
+unset xtics
+unset ytics
+unset border
+set xrange [0:1]
+set yrange [0:1]
+
+plot -1
+THEEND
+      close(OUTFILE);
+   }
+}
+
+sub showDesc() {
+   my ($date,$search) = @_;
+   my $descdataFile = "descdata.$date.$search.txt";
+   my @percs = ();
+   if (open(INFILE,"$cache/$descdataFile")) {
+      my $line = <INFILE>;
+      chomp($line);
+      @percs = split(/\s+/,$line);
+      close(INFILE);
+   }
+   my $descImg = "age.$date.$search.svg";
+   my $safeImg = $descImg;
+   $safeImg =~ s/\+/%2B/g;
+   $safeImg =~ s/#/%23/g;
+   if (not defined $percs[4]) { 
+      if (-s "$cache/$descImg") { print "<p>\nDe gebruikersinformatie is niet beschikbaar.\n"; return(); }
+      else { &makeDescPies($date,$search); }
+   }
+   print "Dit is een samenvatting van de gebruikers bij dit onderwerp:\n";
+   print "<p>\n<table>\n<tr>\n";
+   
+   if (not -s "$cache/$descImg") { print "<p>\nGeen leeftijdsinformatie gevonden\n"; return(); }
+   else {
+      # insert plot image in web page
+      print <<THEEND;
+<td>
+<object data="/cache/$safeImg" type="image/svg+xml" width="325" height="325"></object>
+<p style="text-align: center;">
+<strong>Leeftijd</strong>
+<br> <font style="color:green;">&lt; 18 jaar: $percs[0]%</font>
+<br> <font style="color:red;">18-25 jaar: $percs[1]%</font>
+<br> <font style="color:blue;">&gt; 25 jaar: $percs[2]%</font>
+</td>
+THEEND
+   }
+   $descImg = "gender.$date.$search.svg";
+   $safeImg = $descImg;
+   $safeImg =~ s/\+/%2B/g;
+   $safeImg =~ s/#/%23/g;
+   if (not -s "$cache/$descImg") { print "<p>\nGeen geslachtsinformatie gevonden\n"; return(); }
+   else {
+      # insert plot image in web page
+      print <<THEEND;
+<td>
+<object data="/cache/$safeImg" type="image/svg+xml" width="325" height="325"></object>
+<p style="text-align:center;">
+<strong>Geslacht</strong>
+<br> <font style="color:blue;">man: $percs[3]%</font>
+<br> <font style="color:red;">vrouw: $percs[4]%</font>
+<br> &nbsp;
+</td>
+THEEND
+   }
+   print "</tr>\n</table>\n";
+}
+
+sub makeCoverage() {
+   my $date = shift(@_);
+   my ($year1,$month1,$day1) = &splitDate($date);
+   my $dataCoverage = "data.coverage.$date.txt";
+   my $imgCoverage = "plot.coverage.$date.svg";
+   my $plotCoverage = "plot.coverage.$date.txt";
+   my $totalCoverage = "total.coverage.$date.txt";
+
+   # assume we are dealing with coverage for one day
+   my $path = "cache/$year1/$month1/$day1/Coverage";
+   # process countce
+   my $smooth = 10; # default smoothing: 10 minutes (for day plot)
+   $smooth = int(&diffDate($date)/8640);
+   if ($smooth < 1) { $smooth = 1; }
+   if (not open(INFILE,"LANG=en_US.UTF-8 hadoop fs -cat \"$path/part-r-*\" | /bin/gunzip -c | sort |")) {
+      &errlog("$date coverage: cannot open results file $path/part-r-* !\n");
+   } else {
+      my @results = ();
+      while (<INFILE>) {
+         $line = $_;
+         chomp($line);
+         my ($time,$track,$follow,$trackFollow) = split(/\s+/,$line);
+         if (defined $trackFollow and $trackFollow > 0) {
+            my $result = sprintf "%s %d %d\n",
+                         $time,$track,$track*$follow/$trackFollow;
+            push(@results,$result);
+         } else {
+            my $result = sprintf "%s %d %d\n",
+                         $time,$track,$track;
+            push(@results,$result);
+         }
+      }
+      close(INFILE);
+      # write counts to gnuplot data file
+      if (@results and open(OUTFILE,">$cache/$dataCoverage")) {
+         print OUTFILE "#dateHourMinute\t#countFound\t#estimatedTotal\t#percentageFound\t#DATE=$date\n";
+         my @bufferTrack = ();
+         my $totalBufferTrack = 0;
+         my @bufferEstimated = ();
+         my $totalBufferEstimated = 0;
+         # use only 700 points in plot file
+         my $plotMax = 700;
+         my $lastPlot = -1;
+         my $allTrack = 0; # total for this time frame
+         my $allEstimated = 0; # total for this time frame
+         for (my $i=0;$i<=$#results;$i++) {
+            my ($time,$track,$estimated) = split(/\s+/,$results[$i]);
+            push(@bufferTrack,$track);
+            $totalBufferTrack += $track;
+            $allTrack += $track;
+            push(@bufferEstimated,$estimated);
+            $totalBufferEstimated += $estimated;
+            $allEstimated += $estimated;
+            while ($#bufferTrack > $smooth) { 
+               $tmp = shift(@bufferTrack); 
+               $totalBufferTrack -= $tmp;
+               $tmp = shift(@bufferEstimated); 
+               $totalBufferEstimated -= $tmp;
+            } 
+            if ($i >= $smooth) { # show only numbers based on full buffer
+               if (int($i*$plotMax/($#results+1) != $lastPlot)) {
+                  my $t = int(0.5+$totalBufferTrack/($#bufferTrack+1));
+                  my $e = int(0.5+$totalBufferEstimated/($#bufferEstimated+1));
+                  if ($e == 0) { $e = 1; } # 20161107 avoid dividing by zero
+                  printf OUTFILE "%s\t%d\t%d\t%d\n",$time,$t,$e,int(0.5+100*$t/$e);
+                  $lastPlot = int($i*$plotMax/($#results+1));
+               }
+            }
+         }
+         close(OUTFILE);
+         if ($allTrack > 0 and open(OUTFILE,">$cache/$totalCoverage")) {
+            print OUTFILE "$allTrack $allEstimated\n";
+            close(OUTFILE);
+         }
+      }
+   }
+   # make plot file: 20121017: also write to local cache on cloud
+   if (open(OUTFILE,">$cache/$plotCoverage")) {
+      my $xtics = int(&diffDate($date)/6); # default xtics day was 10800
+      my $secondsPerDay = 86400;
+      my $secondsPerHour = 3600;
+      if ($xtics >= 0.75*$secondsPerDay) { 
+         $xtics = int(0.5+$xtics/$secondsPerDay)*$secondsPerDay; 
+      } elsif ($xtics <= 0.75*$secondsPerDay and $xtics >= 0.75*$secondsPerHour) {
+         $xtics = int(0.5+$xtics/$secondsPerHour)*$secondsPerHour; 
+      }
+      print OUTFILE <<THEEND;
+set term svg font 'arial,11' size 640,320
+set xlabel " "
+set ylabel "Nederlandstalige tweets per minuut"
+set output "$cache/$imgCoverage"
+set key top left
+set xtics $xtics # smooth=$smooth
+set pointsize 1
+set title ""
+set xdata time
+set timefmt "%Y%m%d%H%M"
+plot "$cache/$dataCoverage" using 1:2 lw 2 title "gevonden" with lines, "$cache/$dataCoverage" using 1:3 lw 2 title "totaal" with lines
+THEEND
+      close(OUTFILE);
+   }
+   # run gnuplot
+   system("LANG=en_US.UTF-8 /usr/bin/gnuplot \"$cache/$plotCoverage\"");
+   system("LANG=en_US.UTF-8 /bin/mv -f \"$cache/$imgCoverage\" \"$cache/tmp.$imgCoverage\"");
+   system("LANG=en_US.UTF-8 /bin/sed 's/<text> */<text>/' < \"$cache/tmp.$imgCoverage\" > \"$cache/$imgCoverage\"");
+   unlink("$cache/tmp.$imgCoverage");
+}
+
+sub fixUTF() {
+   my $line = shift(@_);
+
+   $line =~ s/\%c3\%aa/ê/gi; # incomplete list!
+   $line =~ s/\%c3\%a0/à/gi;
+   $line =~ s/\%c3\%a1/á/gi;
+   $line =~ s/\%c3\%a6/æ/gi;
+   $line =~ s/\%c3\%a7/ç/gi;
+   $line =~ s/\%c3\%b6/ö/gi;
+   $line =~ s/\%c3\%ab/ë/gi;
+   $line =~ s/\%c3\%a8/è/gi;
+   $line =~ s/\%c3\%a9/é/gi;
+   $line =~ s/%([a-fA-F0-9][a-fA-F0-9])/pack("C", hex($1))/eg;
+   return($line);
+}
+
+sub raisePriority() {
+   my $session = shift(@_);
+   my $jobid = "";
+   while (not open(JOBFILE,"/tmp/$session.err")) { sleep(5); }
+   close(JOBFILE);
+   sleep(5);
+   if  (not open(JOBFILE,"/tmp/$session.err")) { return(); }
+   while (<JOBFILE>) {
+      my $line = $_;
+      chomp($line);
+      if ($line =~ /Running job:\s*(\S+)/) { $jobid = $1; }
+   }
+   close(JOBFILE);
+   if ($jobid ne "") { system("LANG=en_US.UTF-8 hadoop job -set-priority $jobid HIGH"); }
+# system("LANG=en_US.UTF-8 touch /tmp/raised.$jobid");
+   return();
+}
+
+sub getTypesAndTokens() {
+   my $path = shift(@_);
+   my $types = -1;
+   my $tokens = -1;
+   if (open(INFILE,"hadoop fs -cat \"$path\"/totals-r-00000.gz | gunzip -c |")) {
+      my $line = <INFILE>;
+      chomp($line);
+      ($types,$tokens) = split(/\s+/,$line);
+      close(INFILE);
+      if (not defined $types or not defined $tokens or $types !~ /^\d+$/ or $tokens !~ /^\d+$/) {
+         $types = $tokens = -1;
+      }
+   }
+   return($types,$tokens);
+}
+
+sub yesterday() {
+   my ($year,$month,$day) = @_;
+   $day--;
+   if ($day !~ /../) { $day = "0$day"; }
+   if ($day >= 1) { return($year,$month,$day); }
+   # $day < 1
+   $month--;
+   if ($month < 1) { $year--; $month = 12; }
+   $day = &maxDays($year,$month);
+   if ($month !~ /../) { $month = "0$month"; }
+   return($year,$month,$day);
+}
+
+sub getLoad() {
+   my $load = "0";
+   if (open(INFILE,"w|rev|cut -d' ' -f3|rev|head -1|tr -d ,|")) {
+      $load = <INFILE>;
+      chomp($load);
+      close(INFILE);
+   }
+   return($load);
+}
