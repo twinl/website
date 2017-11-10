@@ -1,1 +1,125 @@
-/var/www/counts/index.html
+<html>
+<head>
+<title>Aantallen tweets op twiqs.nl</title>
+<style>
+ul.menu
+{
+   list-style-type:none;
+   margin:0;
+   padding:0;
+   overflow:hidden;
+}
+li.menu
+{
+   float:left;
+}
+a.menu:link,a.menu:visited
+{
+   display:block;
+   width:108px;
+   font-weight:bold;
+   color:#FFFFFF;
+   background-color:#759090;
+   text-align:center;
+   padding:4px;
+   text-decoration:none;
+   text-transform:uppercase;
+   outline:none;
+}
+a.menu:hover,a.menu:active
+{
+   background-color:#557070;
+   outline:none;
+}
+a.tweet:link,a.tweet:visited,a.tweet:hover,a.tweet:active
+{
+   color:#000000;
+   text-decoration:none;
+   outline:none;
+}
+a.cloud:link,a.cloud:visited,a.cloud:hover,a.cloud:active
+{
+   color:#557070;
+   text-decoration:none;
+   outline:none;
+}
+/* page centering, source: http://webpageworkshop.co.uk/main/css_center_page */
+body {
+    margin: 50px 0px;
+    padding: 0px;
+    text-align: center;
+    background-color: #fcfcfc;
+}
+
+div.main {
+    width: 720px;
+    margin: 0px auto;
+    text-align: left;
+    padding: 15px;
+    background-color: #ffffff;
+}
+
+div.inside {
+    width: 700px;
+    margin: 0px auto;
+    text-align: left;
+    padding: 15px;
+    border: 1px solid #000000;
+    background-color: #ffffff;
+}
+</style>
+</head>
+<body>
+<div class="main">
+<a href="http://esciencecenter.nl/"><img src="/images/nlesc-logo.png" align="left" alt="Netherlands eScience Center" width="100" height="35" border="0"></a>
+<a href="https://www.sara.nl/"><img src="/images/surfsara.png" align="left" alt="SARA" width="80" height="30"></a>
+ &nbsp; &nbsp; &nbsp; 
+<a href="/cgi-bin/twitter">twiqs.nl</a> &nbsp;
+<a href="/faq/" style="align:left;">FAQ</a> &nbsp;
+<a href="http://ifarm.nl/erikt/twinl/">Blog</a> &nbsp;
+<strong>Aantallen</strong> &nbsp;
+<a href="../ngrams.html">Ngrams</a>
+<p>
+<div class="inside">
+<h2>Aantallen tweets op twiqs.nl</h2>
+<p>
+Deze pagina bevat informatie over de aantallen tweets die zijn verzameld op <a href="/cgi-bin/twitter/">twiqs.nl</a>.
+De tweets zijn verdeeld in twee groepen: Nederlandstalige tweets en anderstalige tweets. 
+De zoekmachine van twiqs.nl gebruikt alleen de Nederlandstalige tweets.
+</p>
+<table border="1" cellpadding="3">
+<tr><th>  Jaar</th><th>Nederlands</th><th>Anderstalig</th><th align="left">Opmerkingen</th></tr>
+<tr><td>  2010</td><td align="right">   17.204.599</td><td align="right">    3.785.448</td><td>begint op 16 december 2010</td></tr>
+<tr><td>  2011</td><td align="right">  706.908.122</td><td align="right">  248.700.184</td><td></td></tr>
+<tr><td>  2012</td><td align="right">  774.926.259</td><td align="right">  510.549.954</td><td></td></tr>
+<tr><td>  2013</td><td align="right">  795.202.317</td><td align="right">  401.535.733</td><td></td></tr>
+<tr><td>  2014</td><td align="right">  392.039.290</td><td align="right">  147.422.993</td><td></td></tr>
+<tr><td>  2015</td><td align="right">  289.737.091</td><td align="right">   24.412.433</td><td></td></tr>
+<tr><td>  2016</td><td align="right">  258.627.818</td><td align="right">   25.266.939</td><td></td></tr>
+<tr><td>  2017</td><td align="right">  166.595.359</td><td align="right">   16.118.582</td><td></td></tr>
+<tr><td>totaal</td><td align="right">3.401.240.856</td><td align="right">1.377.792.266</td><td></td></tr>
+</table>
+<p>
+De aantallen zijn ook in meer detail beschikbaar, namelijk in tekstbestanden met op elke regel
+een tijdsperiode (jaar-maand-dag-uur-minuut), het aantal Nederlandstalige tweets voor die
+periode en het aantal anderstalige tweets voor de periode:
+</p>
+<ul>
+<li> <a href="months.txt">per maand</a>
+<li> <a href="days.txt">per dag</a>
+<li> <a href="hours.txt">per uur</a>
+<li> <a href="minutes.txt">per minuut</a>
+</ul>
+<p>
+De tweets zijn opgeslagen in gecomprimeerde (gzip) bestanden die elk
+1 uur aan tweets bevatten. In totaal vergt dit 1,7 terabyte aan 
+diskruimte.
+<hr>
+<address>
+Last update: 26 September 2017.
+erikt(at)xs4all.nl
+</address>
+</div>
+</div>
+</body>
+</html>
