@@ -1,0 +1,90 @@
+#!/bin/bash
+# summarize: combine hadoop files in twiqs.nl search result
+# usage: summarize directory
+# 20150410 erikt@xs4all.nl
+
+# check target directory specification
+TARGETDIR=$1
+if [ "X$TARGETDIR" = "X" ]
+then
+   echo "usage: summarize directory"
+   exit 1
+fi
+
+# create new temporary directory
+TMPDIR=/home/cloud/tmp/$$-$RANDOM
+while `test -d $TMPDIR`
+do
+   TMPDIR=/home/cloud/tmp/$$-$RANDOM
+done
+mkdir -p $TMPDIR
+# settings Hadoop
+export HADOOP_HOME=/home/cloud/software/hathi-client
+cd $HADOOP_HOME
+. conf/settings.linux
+cd - >/dev/null 2>/dev/null 
+
+if ! `hadoop fs -test -e "$TARGETDIR/_SUCCESS"`
+then
+   if ! `hadoop fs -test -e "$TARGETDIR/Experts"`
+   then
+      echo "summarize: incomplete directory $TARGETDIR" >&2
+      rm -rf $TMPDIR
+      exit 1
+   fi
+fi
+
+for FILE in geo original text tok tweets
+do
+   for KEY in `hadoop fs -ls "${TARGETDIR}/${FILE}-*"|rev|cut -d'-' -f3|rev|sort -u|sed 's/ /!SPACE!/g'`
+   do
+      KEY=`echo "$KEY"|sed 's/!SPACE!/ /g'`
+      TMPFILE="$TMPDIR/${FILE}-00000000-00-$KEY-m-00000.gz"
+      hadoop fs -cat "${TARGETDIR}/${FILE}-*-${KEY}-*" > "$TMPFILE"
+      hadoop fs -rm -skipTrash "${TARGETDIR}/${FILE}-*-${KEY}-*" 2>/dev/null >/dev/null
+      TMPFILE=`echo "$TMPFILE"|sed 's/ /%20/g'|sed 's/#/%23/g'`
+      hadoop fs -copyFromLocal "$TMPFILE" "$TARGETDIR"
+   done
+done
+
+# part-r-00023.gz
+for FILE in part
+do
+   TMPFILE=$TMPDIR/${FILE}-r-00000.gz
+   hadoop fs -cat "$TARGETDIR"/${FILE}-* > $TMPFILE
+   hadoop fs -rm -skipTrash "$TARGETDIR"/${FILE}-* 2>/dev/null >/dev/null
+   hadoop fs -copyFromLocal $TMPFILE "$TARGETDIR"
+done
+
+# counts-#gtst-r-00023.gz
+for FILE in counts
+do
+   for KEY in `hadoop fs -ls "${TARGETDIR}/${FILE}-*"|rev|cut -d'-' -f3|rev|sort -u|sed 's/ /!SPACE!/g'`
+   do
+      KEY=`echo "$KEY"|sed 's/!SPACE!/ /g'`
+      TMPFILE="$TMPDIR/${FILE}-$KEY-r-00000.gz"
+      hadoop fs -cat "${TARGETDIR}/${FILE}-${KEY}-*" > "$TMPFILE"
+      hadoop fs -rm -skipTrash "${TARGETDIR}/${FILE}-${KEY}-*" 2>/dev/null >/dev/null
+      TMPFILE=`echo "$TMPFILE"|sed 's/ /%20/g'|sed 's/#/%23/g'`
+      hadoop fs -copyFromLocal "$TMPFILE" "$TARGETDIR"
+   done
+done
+
+if ! `hadoop fs -test -e "$TARGETDIR/CountWords/_SUCCESS"`
+then
+   echo "summarize: incomplete directory $TARGETDIR/CountWords" >&2
+   rm -rf $TMPDIR
+   exit 1
+fi
+
+for FILE in totals
+do
+   TMPFILE=$TMPDIR/${FILE}-m-00000.gz
+   hadoop fs -cat "$TARGETDIR"/CountWords/${FILE}-* > $TMPFILE
+   hadoop fs -rm -skipTrash "$TARGETDIR"/CountWords/${FILE}-* 2>/dev/null >/dev/null
+   hadoop fs -copyFromLocal $TMPFILE "$TARGETDIR"/CountWords
+done
+
+rm -rf $TMPDIR
+
+exit 0
