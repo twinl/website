@@ -43,6 +43,7 @@ if (open(INFILE,$motdFile)) {
       $motd .= $line;
    }
    close(INFILE);
+   $motd .= "<br>"
 }
 # $motd = "<small><font color=\"red\">Woensdag 27 februari 17:00: vanwege een storing op het Hadoopcluster kunnen op dit moment geen nieuwe zoekopdrachten worden uitgevoerd.</font></small>";
 # $motd = "<small><font color=\"red\">Het Hadoopcluster is op dinsdag 5 februari 2013 in onderhoud. De zoekfunctie zal daarom regelmatig haperen</font></small>";
