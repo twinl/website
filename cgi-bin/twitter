@@ -61,6 +61,7 @@ $errFile = "$baseDir/errorlog";
 $passwdFile = "$baseDir/passwd";
 @months = qw(januari februari maart april mei juni juli augustus september oktober november december);
 $sleep = 60;
+$PLOTMAX = 1440;
 
 # environment variables
 $ENV{"CLIENT_DIR"} = "/home/cloud/software/hathi-client";
@@ -190,6 +191,7 @@ if (defined $params{"DAY2"}) { $day2 = $params{"DAY2"}; }
 if (defined $params{"HOUR2"}) { $hour2 = $params{"HOUR2"}; }
 ($date1,$date2) = &processDates($year1,$month1,$day1,$hour1,$year2,$month2,$day2,$hour2);
 $date = "$date1-$date2";
+($year1,$month1,$day1,$hour1,$year2,$month2,$day2,$hour2) = &splitDate($date);
 if (defined $params{"DATE"} and $params{"DATE"} =~ /^\d{10}-\d{10}$/) { 
    $date = $params{"DATE"};
    ($year1,$month1,$day1,$hour1,$year2,$month2,$day2,$hour2) = &splitDate($date);
@@ -197,22 +199,14 @@ if (defined $params{"DATE"} and $params{"DATE"} =~ /^\d{10}-\d{10}$/) {
    $date2 = $year2.$month2.$day2.$hour2;
 }
 # only allow one hour searches for everything (echtalles)
-if (defined $search and $search eq $everything and ($date2 ne $date1 and 
-    ($date1 ne "2012120400" or $date2 ne "2012120423") and
-    ($date1 ne "2013022500" or $date2 ne "2013022523") and
-    ($date1 ne "2013022600" or $date2 ne "2013022623") and
-    ($date1 ne "2013022700" or $date2 ne "2013022723") and
-    ($date1 ne "2013022800" or $date2 ne "2013022823") and
-    ($date1 ne "2013030100" or $date2 ne "2013030123") and
-    ($date1 ne "2013030200" or $date2 ne "2013030223") and
-    ($date1 ne "2013030300" or $date2 ne "2013030323")
-   )) {
-   $date2 = $date1;
-   $date = "$date1-$date1";
+if (defined $search and $search eq $everything and $date2 ne $date1) {
    $year2 = $year1;
    $month2 = $month1;
    $day2 = $day1;
-   $hour2 = $hour1;
+   if ($hour2 lt $hour1) { $hour2 = "23"; }
+   $date1 = $year1.$month1.$day1.$hour1;
+   $date2 = $year2.$month2.$day2.$hour2;
+   $date = "$date1-$date2";
 }
 
 $selectedMinute = "00";
@@ -596,33 +590,33 @@ sub makeWebFiles() {
          # write counts to gnuplot data file
          if (@results and open(OUTFILE,">$cache/$dataFile.$i")) {
             print OUTFILE "#dateHourMinute\t#fractionMatched\t#countNonMatched\t#countMatched\t#DATE=$date\t#SEARCHTOKEN=$search\n";
-            @buffer = ();
-            $sum = 0;
+            my @freqBuffer = ();
+            my $freqSum = 0;
             # use only 700 points in plot file
-            my $plotMax = 700;
             my $lastPlot = -1;
             # shift graph one position to the left
             my $missedStored = 0;
             my $matchedStored = 0;
+            my $percentageFactor = 100.0;
+            if ($search == $everything) { $percentageFactor = 1.0; }
             for (my $i=0;$i<=$#results;$i++) {
                ($time,$freq,$missed,$matched) = split(/\s+/,$results[$i]);
-               push(@buffer,$freq);
-               $sum += $freq;
-               while ($#buffer > $smooth) { 
-                  $tmp = shift(@buffer); 
-                  $sum -= $tmp;
+               if ($search == $everything) { $freq = $matched; }
+               push(@freqBuffer,$freq);
+               $freqSum += $freq;
+               while ($#freqBuffer > $smooth) { 
+                  my $tmp = shift(@freqBuffer); 
+                  $freqSum -= $tmp;
                } 
-               # if ($i >= $smooth) { # only plot values based on full buffer
-                  if (int($i*$plotMax/($#results+1)) != $lastPlot) {
-                     printf OUTFILE "%s\t%f\t%d\t%d\n",
-                            "$time",100*$sum/($#buffer+1),$missed+$missedStored,$matched+$matchedStored;
-                     $lastPlot = int($i*$plotMax/($#results+1));
-                     $missedStored = $matchedStored = 0;
-                  } else {
-                     $missedStored += $missed;
-                     $matchedStored += $matched;
-                  }
-               #}
+               if (int($i*$PLOTMAX/($#results+1)) != $lastPlot) {
+                  printf OUTFILE "%s\t%f\t%d\t%d\n",
+                         "$time",$percentageFactor*$freqSum/($#freqBuffer+1),$missed+$missedStored,$matched+$matchedStored;
+                  $lastPlot = int($i*$PLOTMAX/($#results+1));
+                  $missedStored = $matchedStored = 0;
+               } else {
+                  $missedStored += $missed;
+                  $matchedStored += $matched;
+               }
             } 
             close(OUTFILE);
          }
@@ -642,7 +636,7 @@ sub makeWebFiles() {
       if ($search =~ /^twinl-sent-[a-z]*\+([^,]*)$/) { $text .=  " met $1"; }
       $column = 2; # plot second column (relative %) unless search=echtalles (column 4=frequency)
       if ($#files == 0 and $search eq $everything) { 
-         $column = 4;
+         # $column = 4;
          $text = "Nederlandstalige tweets per minuut"; 
       }
       print OUTFILE <<THEEND;
@@ -1182,11 +1176,11 @@ Voorbeelden:
 <p>
 <ul>
 <li> <a target="_parent" href="$command?SEARCH=mh17\&DATE=2014071700-2014071723">"mh17" op donderdag 17 juli 2014</a> (grafiek)
-<li> <a target="_parent" href="$command?SEARCH=koningsdag\&DATE=2014042600-2014042623&SHOWHEATMAP">"koningsdag" op zaterdag 26 april 2014</a> (kaart)
-<li> <a target="_parent" href="$command?SEARCH=ajax,pec\&DATE=2014042000-2014042023">"ajax,pec" op zondag 20 april 2014</a> (grafiek)
-<li> <a target="_parent" href="$command?SEARCH=nagels\&DATE=2014090100-2014093023\&SHOWUSERS">"nagels" in september 2014</a> (gebruikersinformatie)
 <li> <a target="_parent" href="$command?SEARCH=hedde&DATE=2014070100-2014093023&SHOWHEATMAP">"hedde" in juli-september 2014</a> (kaart voor dialectwoord)
-<li> <a target="_parent" href="$command?SEARCH=zwarte%20piet&DATE=2014090100-2014093023&SHOWCLOUD">"zwarte piet" in september 2014</a> (woordenwolk)
+<li> <a target="_parent" href="$command?SEARCH=nagels\&DATE=2017090100-2017093023\&SHOWUSERS">"nagels" in september 2017</a> (gebruikersinformatie)
+<li> <a target="_parent" href="$command?SEARCH=ajax,pec\&DATE=2014042000-2014042023">"ajax,pec" op zondag 20 april 2014</a> (grafiek)
+<li> <a target="_parent" href="$command?SEARCH=piet&DATE=2016110100-2016123123&SHOWCLOUD">"piet" in november-december 2016</a> (woordenwolk)
+<li> <a target="_parent" href="$command?SEARCH=echtalles&DATE=2017112900-2017112923">alle tweets van woensdag 29 november 2017</a>
 </ul>
 THEEND
 }
@@ -3648,7 +3642,6 @@ sub makeCoverage() {
          my @bufferEstimated = ();
          my $totalBufferEstimated = 0;
          # use only 700 points in plot file
-         my $plotMax = 700;
          my $lastPlot = -1;
          my $allTrack = 0; # total for this time frame
          my $allEstimated = 0; # total for this time frame
@@ -3667,12 +3660,12 @@ sub makeCoverage() {
                $totalBufferEstimated -= $tmp;
             } 
             if ($i >= $smooth) { # show only numbers based on full buffer
-               if (int($i*$plotMax/($#results+1) != $lastPlot)) {
+               if (int($i*$PLOTMAX/($#results+1) != $lastPlot)) {
                   my $t = int(0.5+$totalBufferTrack/($#bufferTrack+1));
                   my $e = int(0.5+$totalBufferEstimated/($#bufferEstimated+1));
                   if ($e == 0) { $e = 1; } # 20161107 avoid dividing by zero
                   printf OUTFILE "%s\t%d\t%d\t%d\n",$time,$t,$e,int(0.5+100*$t/$e);
-                  $lastPlot = int($i*$plotMax/($#results+1));
+                  $lastPlot = int($i*$PLOTMAX/($#results+1));
                }
             }
          }
