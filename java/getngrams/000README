@@ -25,4 +25,5 @@ fi
 make run DATE=$DATE
 hadoop fs -cat cache/$DATE/GetNgrams/count* | gunzip -c | sort -k2 > $M.txt
 zip -ry $M.zip $M.txt
-scp $M.txt $M.zip $W:/data/ngrams
+rm -f /data/ngrams/$M.txt /data/ngrams/$M.zip
+mv $M.txt $M.zip /data/ngrams
