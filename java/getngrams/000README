@@ -1,0 +1,28 @@
+#!/bin/bash
+# 20161003 creating a month file
+
+MONTH=`date -d 'last month' +'%m'`
+YEAR=`date -d 'last month' +'%Y'`
+M=$YEAR$MONTH
+LASTDAY=31
+if [ $MONTH == "04" -o $MONTH == "06" -o $MONTH == "09" -o $MONTH == "11" ]
+then
+   LASTDAY=30
+elif [ $MONTH == "02" -a "`echo $MONTH-$MONTH/4*4|bc`" == "0" ]
+then
+   LASTDAY=29
+elif [ $MONTH == "02" ]
+then
+   LASTDAY=28
+fi
+DATE=${M}0100-${M}${LASTDAY}23
+if [ -n "$1" ]
+then
+   DATE=$1
+   M=`echo $DATE|cut -c-6`
+   hadoop fs -rm -r cache/$DATE/GetNgrams
+fi
+make run DATE=$DATE
+hadoop fs -cat cache/$DATE/GetNgrams/count* | gunzip -c | sort -k2 > $M.txt
+zip -ry $M.zip $M.txt
+scp $M.txt $M.zip $W:/data/ngrams
