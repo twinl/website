@@ -91,18 +91,20 @@ public class MyMapper extends Mapper<LongWritable, Text, Text, Text> {
 
             }
         }
-        // cheack for user search: keyword is @user
+        // check for user search: keyword is @user
         char[] sArray = search.toCharArray();
-        if (sArray[0] == '@') {
-            // user search detected
-            char[] newArray = new char[sArray.length-1];
-            for (int i=1;i<sArray.length;i++) { newArray[i-1] = sArray[i]; }
-            userSearch = 1;
-            search = new String(newArray);
-            p = Pattern.compile(".*\\b"+search+"\\b.*",
-                                Pattern.CASE_INSENSITIVE |
-                                Pattern.UNICODE_CASE);
-        } else if (search.equals("twinl-smiley")) {
+        // removed on 20180125
+        // if (sArray[0] == '@') {
+        //    // user search detected
+        //    char[] newArray = new char[sArray.length-1];
+        //    for (int i=1;i<sArray.length;i++) { newArray[i-1] = sArray[i]; }
+        //    userSearch = 1;
+        //    search = new String(newArray);
+        //    p = Pattern.compile(".*\\b"+search+"\\b.*",
+        //                        Pattern.CASE_INSENSITIVE |
+        //                        Pattern.UNICODE_CASE);
+        // } else 
+        if (search.equals("twinl-smiley")) {
             p = Pattern.compile(".*(:-\\)|:\\)).*",
                                 Pattern.CASE_INSENSITIVE |
                                 Pattern.UNICODE_CASE);
@@ -196,6 +198,12 @@ public class MyMapper extends Mapper<LongWritable, Text, Text, Text> {
     public String processTweet(LongWritable key, Text value, Context context, Map obj, String outFileBase) {
         /* test if tweet contains query */
         String tweetText = (String) obj.get("text");
+        if (obj.get("extended_tweet") != null) {
+            Map extendedTweet = (Map) obj.get("extended_tweet");
+            if (extendedTweet.get("full_text") != null) {
+                tweetText = (String) extendedTweet.get("full_text");
+            }
+        }
         String text = tweetText.replaceAll("\\s"," ");
         // keep retweets
         Matcher m = p.matcher(text);
@@ -336,7 +344,8 @@ public class MyMapper extends Mapper<LongWritable, Text, Text, Text> {
         /* process the tweet, if available */
         if (obj != null && obj.get("text") != null &&
             /* 20130821 added Swedish word gött for Anja Schuppert */
-            (obj.get("twinl_lang") == null || obj.get("twinl_lang").equals("dutch") || search.equals("gött"))) {
+            /* 20181012 removed it */
+            (obj.get("twinl_lang") == null || obj.get("twinl_lang").equals("dutch"))) {
 
             /* get JSON record (single line) and extract the tweet */
             String returnString = processTweet(key,value,context,obj,"text");
@@ -360,6 +369,12 @@ public class MyMapper extends Mapper<LongWritable, Text, Text, Text> {
             Matcher t = q.matcher(searchTwinl);
             // second check if tweets matches query
             String tweetText = (String) obj.get("text");
+            if (obj.get("extended_tweet") != null) {
+                Map extendedTweet = (Map) obj.get("extended_tweet");
+                if (extendedTweet.get("full_text") != null) {
+                    tweetText = (String) extendedTweet.get("full_text");
+                }
+            }
             String text = tweetText.replaceAll("\\s"," ");
             Matcher m = p.matcher(text);
             if ((! t.matches()) || m.matches() || search.equals("echtalles")) {
