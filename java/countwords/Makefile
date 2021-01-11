@@ -10,4 +10,5 @@ all:
 	chmod 755 OldFiles
 
 run:
-	hadoop jar CountWords.jar nl.sara.hadoop.CountWords -libjars CountWords.jar $(MYPATH)
+	true
+#	hadoop jar CountWords.jar nl.sara.hadoop.CountWords -libjars CountWords.jar $(MYPATH)

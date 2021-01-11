@@ -15,4 +15,5 @@ all:
 	jar -cvf TTest.jar -C . .
 
 run:
-	hadoop jar TTest.jar nl.sara.hadoop.TTest -libjars TTest.jar $(MYPATH1) $(MYPATH2) $(TYPESQUERY) $(TOKENSQUERY) $(TYPESREFERENCE) $(TOKENSREFERENCE) $(SUBTRACT)
+	true
+#	hadoop jar TTest.jar nl.sara.hadoop.TTest -libjars TTest.jar $(MYPATH1) $(MYPATH2) $(TYPESQUERY) $(TOKENSQUERY) $(TYPESREFERENCE) $(TOKENSREFERENCE) $(SUBTRACT)

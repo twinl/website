@@ -176,7 +176,12 @@ anderen worden verspreid. We mogen wel de ids van de tweets en
 de bijbehorende auteurs aanbieden. Je kan alle ids die bij een 
 zoekresultaat horen, downloaden en dan de tweets opzoeken op 
 Twitter op adressen van het formaat 
-<a href="https://twitter.com/1519380065/status/149467413254119424">https://twitter.com/gebruikers_id/status/tweet_id</a>
+<a href="https://twitter.com/1519380065/status/149467413254119424">https://twitter.com/gebruikers_id/status/tweet_id</a> . Een alternatief is 
+om de tweets te downloaden met dit
+<a href="https://raw.githubusercontent.com/online-behaviour/machine-learning/master/getTweetsId.py">Pythonprogramma</a>.
+Voor het gebruik hiervan heb je een Twitteraccount nodig 
+waarvoor je vier
+<a href="https://stackoverflow.com/questions/1808855/getting-new-twitter-api-consumer-and-secret-keys">keys moet aanmaken bij Twitter</a>.
 <p>
 We bieden wel 
 <a href="../ngrams.html">lijsten met woordfrequenties</a>
@@ -248,8 +253,9 @@ verzender, profielinformatie en soms locatie. Een deel van
 deze informatie kan worden gebruikt om de zoekopdrachten in 
 te perken:
 <p>
-<strong>@gebruiker</strong>: geef alle tweets van deze 
-gebruiker en alle tweets die deze gebruiker vermelden.
+<strike>@gebruiker: geef alle tweets van deze 
+gebruiker en alle tweets die deze gebruiker vermelden.</strike>
+(uitgezet op 29 januari 2018)
 Over het algemeen kunnen de tweets van een gebruiker
 beter worden opgezocht op Twitter via de directory
 http://twitter.com/gebruiker
@@ -372,9 +378,14 @@ bij meerdere gelijktijdige logins op hetzelfde account kunnen
 dingen misgaan. 
 <p>
 In het script moeten Twittersleutels worden ingevuld. Zie regel 
-17 in het script en verder voor instructies. De 
-<a href="track.txt">zoekwoorden</a> 
-die twiqs.nl gebruikt, kunnen eventueel worden ingevuld op de
+17 in het script en verder voor instructies. De zoekwoorden
+die twiqs.nl gebruikt
+(<a href="track.txt">tot 13-06-2020</a>,
+<a href="track2020.txt">vanaf 13-06-2020</a>,
+<a href="track20200620.txt">vanaf 20-06-2020</a>,
+<a href="track20200622.txt">vanaf 23-06-2020</a>,
+<a href="track20200711.txt">vanaf 11-07-2020</a>),
+kunnen eventueel worden ingevuld op de
 regel <tt>my $words = "???"</tt> in het script maar je kan daar 
 ook je eigen zoekwoorden invullen.
 <p>
@@ -418,10 +429,10 @@ en visualiseren:
 <p>
 <ul>
 <li> <a href="http://www.let.rug.nl/gosse/Ngrams/">Twitter ngrams</a>: snel zoeken naar woordreeksen op Twitter (van Gosse Bouma)
-<li> <a href="http://twinl.surfsaralabs.nl">SURFsara</a>: testversie van een snelle TwiNL bij SURFsara
+<li> <a href="https://twinl.surfsara.nl/">SURFsara</a>: testversie van een snelle TwiNL bij SURFsara
 <li> <a href="http://www.let.rug.nl/~kleiweg/bin/dagtwform.py">RuG</a>: zoeken naar tweets bij de RuG
-<li> <a href="http://topsy.com">Topsy</a>: social media search bij Topsy
 <li> <a href="https://twitter.com/search-home">Twitter</a>: tweets zoeken bij Twitter
+<li> <a href="https://developer.twitter.com/en/enterprise">Enterprise solutions</a> of Twitter
 </ul>
 
 <p>
@@ -467,7 +478,7 @@ of als commentaar plaatsen op de
 <a href="http://ifarm.nl/erikt/twinl/">blog</a>.
 <hr>
 <address>
-Last update: 26 september 2016.
+Last update: 28 juli 2020.
 erikt(at)xs4all.nl
 </address>
 </div>

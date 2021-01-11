@@ -14,6 +14,11 @@ use File::Basename;
 use CGI::Cookie;
 use Env;
 
+my $q = CGI->new;
+print $q->header(-charset=>'utf-8');
+print("Het Hadoopsysteem is stopgezet. De status kan niet worden opgevraagd.");
+exit(0);
+
 # environment variables
 $ENV{"CLIENT_DIR"} = "/home/cloud/software/hathi-client";
 $ENV{"KRB5_CONF"} = $ENV{"CLIENT_DIR"}."/conf/krb5.conf";
@@ -112,6 +117,10 @@ if (defined $cookies{"cookie"} and defined $cookies{"cookie"}->value) {
 
 if (not defined $myCookie or $myCookie eq "") { print $q->header(-charset=>'utf-8'); }
 else { print $q->header(-charset=>'utf-8', -cookie=>$myCookie); }
+
+print("Het Hadoopsysteem is stopgezet. De status kan niet worden opgevraagd.");
+exit(0);
+
 
 # read logfile
 my %log = ();
@@ -293,7 +302,7 @@ THEEND
    close(INFILE);
 }
 my $prettyDate = &prettyDate();
-my $load = &getLoad();
+$load = &getLoad();
 if ($load >= 10) { $load = "<font color=\"red\">$load</font>"; }
 $load = "Web server load: $load\n";
 my $hadoopFileCount = &getHadoopFileCount();

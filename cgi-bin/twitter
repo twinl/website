@@ -87,6 +87,7 @@ $everything = "echtalles";
 $MAIL= "erikt(at)xs4all.nl";
 $MAXLOAD = 10;
 $MESSAGE = "";
+$MINFORCLOUD = 10;
 
 # get parameters (rather than CGI->Vars: problem with utf)
 # from: http://www.mediacollege.com/internet/perl/query-string.html
@@ -194,6 +195,11 @@ $date = "$date1-$date2";
 ($year1,$month1,$day1,$hour1,$year2,$month2,$day2,$hour2) = &splitDate($date);
 if (defined $params{"DATE"} and $params{"DATE"} =~ /^\d{10}-\d{10}$/) { 
    $date = $params{"DATE"};
+   ($year1,$month1,$day1,$hour1,$year2,$month2,$day2,$hour2) = &splitDate($date);
+   $date1 = $year1.$month1.$day1.$hour1;
+   $date2 = $year2.$month2.$day2.$hour2;
+} elsif (defined $params{"DATE"} and $params{"DATE"} =~ /^\d{10}$/) {
+   $date = "$params{'DATE'}-$params{'DATE'}";
    ($year1,$month1,$day1,$hour1,$year2,$month2,$day2,$hour2) = &splitDate($date);
    $date1 = $year1.$month1.$day1.$hour1;
    $date2 = $year2.$month2.$day2.$hour2;
@@ -465,35 +471,37 @@ sub searcher() {
       return();                                                                                                                                                                                                                                                  
       ####################################
    } else {
-      my @search = split(/,/,$search);
-      my @sessions = ();
-      for (my $i=0;$i<=$#search;$i++) {
-         if (defined $search[$i] and $search[$i] ne "") { 
-            my $imgFile = "plot.$date.$search[$i].svg";
-            if (not -s "$cache/$imgFile") {
-               my $session = &startSearchProcess($date,$search[$i],$i+1);
-               push(@sessions,$session);
+      if (0) { # 20200522 do not run , queries without hadoop
+         my @search = split(/,/,$search);
+         my @sessions = ();
+         for (my $i=0;$i<=$#search;$i++) {
+            if (defined $search[$i] and $search[$i] ne "") { 
+               my $imgFile = "plot.$date.$search[$i].svg";
+               if (not -s "$cache/$imgFile") {
+                  my $session = &startSearchProcess($date,$search[$i],$i+1);
+                  push(@sessions,$session);
+               }
             }
          }
+         my $session = int(1+rand(32768)).".".$$;
+         if ($_ = fork) {
+            # waiting part: show waiting page and exit
+            if (not $download) { &showWaitingPage($date,$search,$session); }
+            $|++;
+            exit(0);
+         }
+         close(STDOUT);
+         open(STDOUT,">>/dev/null");
+         close(STDERR);
+         open(STDERR,">>/dev/null");
+         close(STDIN);
+         open(STDIN,"/dev/null");
+         # wait for processes to finish and combine results
+         my $aggregatorSearch = "\"$search[0]\"";
+         for (my $i=1;$i<=$#search;$i++) { $aggregatorSearch .= ",\"$search[$i]\""; }
+         system("LANG=en_US.UTF-8 aggregator $date $aggregatorSearch @sessions");
+         &makeWebFiles($date,$search,$session);
       }
-      my $session = int(1+rand(32768)).".".$$;
-      if ($_ = fork) {
-         # waiting part: show waiting page and exit
-         if (not $download) { &showWaitingPage($date,$search,$session); }
-         $|++;
-         exit(0);
-      }
-      close(STDOUT);
-      open(STDOUT,">>/dev/null");
-      close(STDERR);
-      open(STDERR,">>/dev/null");
-      close(STDIN);
-      open(STDIN,"/dev/null");
-      # wait for processes to finish and combine results
-      my $aggregatorSearch = "\"$search[0]\"";
-      for (my $i=1;$i<=$#search;$i++) { $aggregatorSearch .= ",\"$search[$i]\""; }
-      system("LANG=en_US.UTF-8 aggregator $date $aggregatorSearch @sessions");
-      &makeWebFiles($date,$search,$session);
    }
 }
 
@@ -503,7 +511,9 @@ sub startSearchProcess() {
    $session = int(1+rand(32768)).".".$$;
    if (defined $return) { $session .= ".".$return; }
    # do we have a complete earlier search result?
-   if (! system("LANG=en_US.UTF-8 hadoop fs -test -e \"$hcache/_SUCCESS\" 2>/dev/null") == 0) {
+   # 20190124 prevent hadoop process from starting
+   # 20190124 also blocked $HOME/java/search/Makefile (run), and ttest, tokenizer, countwords
+   if (0 and ! system("LANG=en_US.UTF-8 hadoop fs -test -e \"$hcache/_SUCCESS\" 2>/dev/null") == 0) {
       # do we have an earlier search result?
       if (system("LANG=en_US.UTF-8 hadoop fs -test -d \"$hcache\" 2>/dev/null") == 0) {
          if (not $download) {
@@ -541,7 +551,8 @@ sub startSearchProcess() {
          close(INFILE);
       } else { print STDERR "search error!\n"; exit(1); }
    }
-   &makeWebFiles($date,$search,$session);
+   # 20190124 commented away
+   # &makeWebFiles($date,$search,$session);
 }
 
 sub makeWebFiles() {
@@ -589,9 +600,8 @@ sub makeWebFiles() {
          close(INFILE);
          # write counts to gnuplot data file
          if (@results and open(OUTFILE,">$cache/$dataFile.$i")) {
-            print OUTFILE "#dateHourMinute\t#fractionMatched\t#countNonMatched\t#countMatched\t#DATE=$date\t#SEARCHTOKEN=$search\n";
+            print OUTFILE "#dateHourMinute\t#fractionMatched\t#countNonMatched\t#countMatched\t#DATE=$date\t#SEARCHTOKEN=$search\t#SMOOTH=$smooth\n";
             my @freqBuffer = ();
-            my $freqSum = 0;
             # use only 700 points in plot file
             my $lastPlot = -1;
             # shift graph one position to the left
@@ -603,19 +613,16 @@ sub makeWebFiles() {
                ($time,$freq,$missed,$matched) = split(/\s+/,$results[$i]);
                if ($search == $everything) { $freq = $matched; }
                push(@freqBuffer,$freq);
-               $freqSum += $freq;
-               while ($#freqBuffer > $smooth) { 
-                  my $tmp = shift(@freqBuffer); 
-                  $freqSum -= $tmp;
-               } 
+               while ($#freqBuffer > $smooth) { shift(@freqBuffer); }
+               my $freqSum = 0;
+               for ($j=0;$j<=$#freqBuffer;$j++) { $freqSum += $freqBuffer[$j]; }
+               $missedStored += $missed;
+               $matchedStored += $matched;
                if (int($i*$PLOTMAX/($#results+1)) != $lastPlot) {
-                  printf OUTFILE "%s\t%f\t%d\t%d\n",
-                         "$time",$percentageFactor*$freqSum/($#freqBuffer+1),$missed+$missedStored,$matched+$matchedStored;
+                  printf OUTFILE "%s\t%f\t%d\t%d\n", # 20180213 bug somewhere here: freq 10 times too high
+                         "$time",$percentageFactor*$freqSum/($#freqBuffer+1),$missedStored,$matchedStored;
                   $lastPlot = int($i*$PLOTMAX/($#results+1));
                   $missedStored = $matchedStored = 0;
-               } else {
-                  $missedStored += $missed;
-                  $matchedStored += $matched;
                }
             } 
             close(OUTFILE);
@@ -1275,7 +1282,7 @@ THEEND
    if ($totalMatched <= 0 and not $showCoverage) { return(); }
    if ($showTweets) { &showTweets($date,$search,$selectedHour,$selectedDay,$selectedMinute); }
    elsif ($showOriginals) { &showOriginals($date,$search,$selectedHour,$selectedDay,$selectedMinute); }
-   elsif ($showCloud) { &showCloud($date,$search); &showSentiment($date,$search); }
+   elsif ($showCloud) { &showCloud($date,$search,$totalMatched); &showSentiment($date,$search); }
    elsif ($showExperts) { &showDesc($date,$search); &showExperts($date,$search); }
    elsif ($showGraph) {
       if (not -s "$cache/$imgFile") { print "<p>\nGeen informatie gevonden\n"; }
@@ -1664,7 +1671,7 @@ if (defined $user and $user ne "" and $user ne "guest") {
 <td><a href="/cgi-bin/twitter" style="color:black; text-decoration:none; font-weight:bold">twiqs.nl</a></td>
 <td><a target="_parent" href="/faq/" style="align:left;">FAQ</a> &nbsp;</td>
 <td><a target="_parent" href="http://ifarm.nl/erikt/twinl/" style="align:left;">Blog</a> &nbsp;</td>
-<td><a target="_parent" href="ngrams/" style="align:left;">Ngrams</a> &nbsp;</td>
+<td><a target="_parent" href="/counts/" style="align:left;">Aantallen</a> &nbsp;</td>
 THEEND
    if ($loginStatus == $LOGINSUCCESS) {
       print<<THEEND;
@@ -1694,7 +1701,7 @@ THEEND
 <td><a href="/cgi-bin/twitter" style="color:black; text-decoration:none; font-weight:bold">twiqs.nl</a></td>
 <td><a target="_parent" href="/faq/" style="align:left;">FAQ</a></td>
 <td><a target="_parent" href="http://ifarm.nl/erikt/twinl/" style="align:left;">Blog</a></td>
-<td><a target="_parent" href="/ngrams.html" style="align:left;">Ngrams</a></td>
+<td><a target="_parent" href="/counts/" style="align:left;">Aantallen</a></td>
 THEEND
    if ($loginStatus == $LOGINFAILED) {
       print<<THEEND;
@@ -1937,7 +1944,10 @@ sub localClient() {
    return($userLevel eq "1" or
           $ENV{"REMOTE_ADDR"} =~ /^145\.100\.61\./ or
           $ENV{"REMOTE_ADDR"} eq "131.174.185.100" or
-          $ENV{"REMOTE_ADDR"} eq "131.174.30.4");
+          $ENV{"REMOTE_ADDR"} eq "131.174.30.4" or
+          $ENV{"REMOTE_ADDR"} eq "31.20.195.226" or
+          $ENV{"REMOTE_ADDR"} eq "129.125.14.22" or
+          $ENV{"REMOTE_ADDR"} eq "83.160.122.119");
 }
 
 sub makePath() {
@@ -2474,7 +2484,11 @@ sub download() {
          close(INFILE);
       }
    } elsif ($showMetadata and &localClient()) { # download tweets+meta data
-      if (open(INFILE,"LANG=en_US.UTF-8 hadoop fs -cat \"$path\"/tweet* | /bin/gunzip -c |")) {
+      my $metadataFile = $date;
+      $metadataFile =~ s/-.*//;
+      $metadataFile =~ s/(..)$/-$1/;
+      if (open(INFILE,"/bin/gunzip -c /data/twitter/${metadataFile}.out.gz|")) {
+      # if (open(INFILE,"LANG=en_US.UTF-8 hadoop fs -cat \"$path\"/tweet* | /bin/gunzip -c |")) {
          # collect relevant information from tweets
          while (<INFILE>) {
             my $line = $_;
@@ -2920,7 +2934,7 @@ sub makeExperts() {
 }
 
 sub showCloud() {
-   my ($date,$search) = @_;
+   my ($date,$search,$totalMatched) = @_;
    my $session = int(1+rand(32768)).".".$$;
    my ($year1,$month1,$day1) = &splitDate($date);
    my $MAXFONTSIZE = 200;
@@ -2929,7 +2943,7 @@ sub showCloud() {
    my @scores;
    my $path = &makePath($date,$search);
    if (open(INFILE,"$cache/$cloudFile")) { close(INFILE); }
-   else {
+   elsif ($totalMatched >= $MINFORCLOUD) {
       my ($yesterdayY,$yesterdayM,$yesterdayD) = &yesterday($year1,$month1,$day1);
       my $nextPath = "$yesterdayY/$yesterdayM/$yesterdayD/Tokenizer/CountWords";
       my $subtract = "no";
@@ -3103,6 +3117,9 @@ sub showCloud() {
    }
    if ($#tokens < 0) { 
       print "<p>\nDe woordenwolk is nog niet beschikbaar\n"; 
+      unlink("$cache/$cloudFile");
+   } elsif ($totalMatched < $MINFORCLOUD) {
+      print "<p>\nEr zijn te weinig tweets voor het maken van de woordenwolk.\n"; 
       unlink("$cache/$cloudFile");
    } else {
       print "Dit zijn de belangrijkste verwante woorden:\n"; 

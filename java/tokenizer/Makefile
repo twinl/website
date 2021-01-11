@@ -10,4 +10,5 @@ all:
 	chmod 755 OldFiles
 
 run:
-	hadoop jar Tokenizer.jar nl.sara.hadoop.Tokenizer -libjars json-simple-1.1.1.jar,Tokenizer.jar $(MYPATH)
+	true
+#	hadoop jar Tokenizer.jar nl.sara.hadoop.Tokenizer -libjars json-simple-1.1.1.jar,Tokenizer.jar $(MYPATH)
