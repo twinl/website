@@ -1,5 +1,6 @@
 # TwiNL: website code
 [![DOI](https://zenodo.org/badge/110261678.svg)](https://zenodo.org/badge/latestdoi/110261678)
+[![Research Software Directory](https://img.shields.io/badge/rsd-Research%20Software%20Directory-00a3e3.svg)](https://research-software.nl/software/twinl-website-code)
 
 This repository contains the website code of the project
 [TwiNL](https://www.esciencecenter.nl/project/twinl) 
